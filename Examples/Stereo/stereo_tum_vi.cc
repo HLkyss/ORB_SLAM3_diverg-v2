@@ -90,7 +90,7 @@ int main(int argc, char **argv)
     cout.precision(17);
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::STEREO,true);
+    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::STEREO,true); // todo-jixian 0.1
     float imageScale = SLAM.GetImageScale();
 
     cout << endl << "-------" << endl;
@@ -113,6 +113,7 @@ int main(int argc, char **argv)
             // Read image from file
             imLeft = cv::imread(vstrImageLeftFilenames[seq][ni],cv::IMREAD_GRAYSCALE);
             imRight = cv::imread(vstrImageRightFilenames[seq][ni],cv::IMREAD_GRAYSCALE);
+            cout<<"读取图片:"<<vstrImageLeftFilenames[seq][ni]<<endl;
 
             if(imageScale != 1.f)
             {
@@ -138,7 +139,7 @@ int main(int argc, char **argv)
 #endif
             }
 
-            // clahe
+            // clahe 提高图像对比度
             clahe->apply(imLeft,imLeft);
             clahe->apply(imRight,imRight);
 
@@ -201,7 +202,7 @@ int main(int argc, char **argv)
 
     // Tracking time statistics
 
-    // Save camera trajectory
+    // Save camera trajectory   在路径~\orb_slam3-master\Examples中生成轨迹文件.txt(euro数据集路径貌似不同，在~\orb_slam3-master\目录下)
     std::chrono::system_clock::time_point scNow = std::chrono::system_clock::now();
     std::time_t now = std::chrono::system_clock::to_time_t(scNow);
     std::stringstream ss;
@@ -211,13 +212,21 @@ int main(int argc, char **argv)
     {
         const string kf_file =  "kf_" + string(argv[argc-1]) + ".txt";
         const string f_file =  "f_" + string(argv[argc-1]) + ".txt";
-        SLAM.SaveTrajectoryEuRoC(f_file);
-        SLAM.SaveKeyFrameTrajectoryEuRoC(kf_file);
+//        SLAM.SaveTrajectoryEuRoC(f_file);
+//        SLAM.SaveKeyFrameTrajectoryEuRoC(kf_file);
+//        SLAM.SaveTrajectoryEuRoC("/home/hl/project/ORB_SLAM3_detailed_comments-master/TrajectoryEuRoC.txt");
+//        SLAM.SaveKeyFrameTrajectoryEuRoC("/home/hl/project/ORB_SLAM3_detailed_comments-master/KeyFrameTrajectoryEuRoC.txt");
+//        SLAM.SaveKeyFrameTrajectoryTUM("/home/hl/project/ORB_SLAM3_detailed_comments-master/KeyFrameTrajectory_TUM_Format.txt");
+//        SLAM.SaveTrajectoryTUM("/home/hl/project/ORB_SLAM3_detailed_comments-master/FrameTrajectory_TUM_Format.txt");
+        SLAM.SaveTrajectoryKITTI("/home/hl/project/ORB_SLAM3_detailed_comments-master/FrameTrajectory_KITTI_Format.txt");
     }
     else
     {
         SLAM.SaveTrajectoryEuRoC("CameraTrajectory.txt");
         SLAM.SaveKeyFrameTrajectoryEuRoC("KeyFrameTrajectory.txt");
+        SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory_TUM_Format.txt");
+        SLAM.SaveTrajectoryTUM("FrameTrajectory_TUM_Format.txt");
+        SLAM.SaveTrajectoryKITTI("FrameTrajectory_KITTI_Format.txt");
     }
 
     sort(vTimesTrack.begin(),vTimesTrack.end());

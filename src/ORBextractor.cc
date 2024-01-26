@@ -470,7 +470,7 @@ ORBextractor::ORBextractor(int _nfeatures,		//指定要提取的特征点数目
 						   int _nlevels,		//指定图像金字塔的层数
 						   int _iniThFAST,		//指定初始的FAST特征点提取参数，可以提取出最明显的角点
 						   int _minThFAST):		//如果因为图像纹理不丰富提取出的特征点不多，为了达到想要的特征点数目，
-												//就使用这个参数提取出不是那么明显的角点
+												//就降低到这个阈值提取出不是那么明显的角点
     nfeatures(_nfeatures), scaleFactor(_scaleFactor), nlevels(_nlevels),
     iniThFAST(_iniThFAST), minThFAST(_minThFAST)//设置这些参数
 {
@@ -1554,9 +1554,9 @@ static void computeDescriptors(const Mat& image, vector<KeyPoint>& keypoints, Ma
  * @param[in & out] _keypoints                存储特征点关键点的向量
  * @param[in & out] _descriptors              存储特征点描述子的矩阵
  */
-    int ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPoint>& _keypoints,
+    int ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPoint>& _keypoints,    // todo diy 在这里限制特征点范围，只在共视区域初始化
                                   OutputArray _descriptors, std::vector<int> &vLappingArea)
-    {
+    {// operator() 方法通常不是显式调用的，而是通过将对象当作函数来隐式调用
 	// Step 1 检查图像有效性。如果图像为空，那么就直接返回
         if(_image.empty())
             return -1;
@@ -1663,8 +1663,10 @@ static void computeDescriptors(const Mat& image, vector<KeyPoint>& keypoints, Ma
 					// 特征点本身直接乘缩放倍数就可以了
                     keypoint->pt *= scale;
                 }
-                // ?TODO vLappingArea 
-                if(keypoint->pt.x >= vLappingArea[0] && keypoint->pt.x <= vLappingArea[1]){
+                // ?TODO vLappingArea  这里能看出，区分了单目点monoIndex和双目点stereoIndex
+//                cout<<"vLappingArea[0] = "<<vLappingArea[0]<<endl;//两个线程都执行，所以输出有时候会乱
+//                cout<<"vLappingArea[1] = "<<vLappingArea[1]<<endl;
+                if(keypoint->pt.x >= vLappingArea[0] && keypoint->pt.x <= vLappingArea[1]){ // question
                     _keypoints.at(stereoIndex) = (*keypoint);
                     desc.row(i).copyTo(descriptors.row(stereoIndex));
                     stereoIndex--;
@@ -1677,7 +1679,7 @@ static void computeDescriptors(const Mat& image, vector<KeyPoint>& keypoints, Ma
                 i++;
             }
         }
-        //cout << "[ORBextractor]: extracted " << _keypoints.size() << " KeyPoints" << endl;
+        cout << "[ORBextractor]: extracted " << _keypoints.size() << " KeyPoints" << endl;
         return monoIndex;
     }
 	/**

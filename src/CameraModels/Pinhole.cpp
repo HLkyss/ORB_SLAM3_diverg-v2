@@ -183,7 +183,7 @@ Eigen::Matrix3f Pinhole::toK_()
  * @param unc 特征点2的尺度的平方，1.2^2n
  * @return 三维点恢复的成功与否
  */
-bool Pinhole::epipolarConstrain(
+bool Pinhole::epipolarConstrain(    // todo-jixian
     GeometricCamera *pCamera2, const cv::KeyPoint &kp1, const cv::KeyPoint &kp2,
     const Eigen::Matrix3f &R12, const Eigen::Vector3f &t12, const float sigmaLevel, const float unc)
 {

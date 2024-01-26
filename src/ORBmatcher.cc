@@ -31,10 +31,10 @@ using namespace std;
 
 namespace ORB_SLAM3
 {
-
-    const int ORBmatcher::TH_HIGH = 100;
-    const int ORBmatcher::TH_LOW = 50;
-    const int ORBmatcher::HISTO_LENGTH = 30;
+    // @todo 是否可以调参: TH_HIGH TH_LOW HISTO_LENGTH
+    const int ORBmatcher::TH_HIGH = 100;    // 100 高阈值用于筛选出最可靠的匹配对，去除不够稳定的匹配。   当ORB-SLAM3试图找到两个图像之间的匹配特征点时，它会计算特征点描述符之间的汉明距离，如果距离低于TH_HIGH，则它们被认为是匹配的。这个高阈值用于在初始匹配阶段快速识别高度相似的特征点。
+    const int ORBmatcher::TH_LOW = 50;  // 50 低阈值用于进一步筛选匹配对，允许一些不太可靠但可能仍然有效的匹配通过。  在某些情况下，例如在光照条件变化或视角变化显著的情况下，即使特征点实际上是匹配的，它们的描述符也可能有较大的差异。TH_LOW 提供了一个更宽松的匹配标准，允许在更具挑战性的情况下进行特征匹配。
+    const int ORBmatcher::HISTO_LENGTH = 30;    // 30 直方图用于计算旋转不变性。HISTO_LENGTH参数定义了直方图的长度，影响了旋转不变性的精度。较长的直方图可以提高精度，但可能会增加计算成本。
 
     // 构造函数,参数默认值为0.6,true
     ORBmatcher::ORBmatcher(float nnratio, bool checkOri): mfNNratio(nnratio), mbCheckOrientation(checkOri)
@@ -113,7 +113,10 @@ namespace ORB_SLAM3
                             //因此需要扩大其搜索空间.
                             //当给定缩放倍率为1.2的时候, mvScaleFactors 中的数据是: 1 1.2 1.2^2 1.2^3 ... 
                             if(er>r*F.mvScaleFactors[nPredictedLevel])
+                            {
+                                cout<<"特征点投影误差超过阈值,说明这个点不行,丢掉."<<endl;
                                 continue;
+                            }
                         }
 
                         const cv::Mat &d = F.mDescriptors.row(idx);
@@ -235,17 +238,24 @@ namespace ORB_SLAM3
                 }
             }
         }
+        cout<<"SearchByProjection points 1 = "<<nmatches<<endl;
         return nmatches;
     }
 
-    // 根据观察的视角来计算匹配的时的搜索窗口大小
+    // 根据观察的视角来计算匹配的时的搜索窗口大小 @todo 修改搜索半径 默认2.5和4
     float ORBmatcher::RadiusByViewingCos(const float &viewCos)
     {
         // 当视角相差小于3.6°，对应cos(3.6°)=0.998，搜索范围是2.5，否则是4
         if(viewCos>0.998)
+        {
+//            return 2.5;
             return 2.5;
+        }
         else
-            return 4.0;
+        {
+//            return 4.0;
+            return 4;
+        }
     }
 
     /**
@@ -276,8 +286,8 @@ namespace ORB_SLAM3
 
         // 将0~360的数转换到0~HISTO_LENGTH的系数
         //! 原作者代码是 const float factor = 1.0f/HISTO_LENGTH; 是错误的，更改为下面代码  
-        // const float factor = HISTO_LENGTH/360.0f;
-        const float factor = 1.0f/HISTO_LENGTH;
+         const float factor = HISTO_LENGTH/360.0f;
+//        const float factor = 1.0f/HISTO_LENGTH;
 
         // We perform the matching over ORB that belong to the same vocabulary node (at a certain level)
         // 将属于同一节点(特定层)的ORB特征进行匹配
@@ -380,10 +390,10 @@ namespace ORB_SLAM3
 
                     }
                     // Step 4：根据阈值 和 角度投票剔除误匹配
-                    // Step 4.1：第一关筛选：匹配距离必须小于设定阈值
+                    // Step 4.1：第一关筛选：匹配距离必须小于设定阈值 todo 词袋筛选1
                     if(bestDist1<=TH_LOW)
                     {
-                        // Step 4.2：第二关筛选：最佳匹配比次佳匹配明显要好，那么最佳匹配才真正靠谱
+                        // Step 4.2：第二关筛选：最佳匹配比次佳匹配明显要好，那么最佳匹配才真正靠谱 todo 词袋筛选2
                         if(static_cast<float>(bestDist1)<mfNNratio*static_cast<float>(bestDist2))
                         {
                             // Step 4.3：记录成功匹配特征点的对应的地图点(来自关键帧)
@@ -477,7 +487,7 @@ namespace ORB_SLAM3
             for(int i=0; i<HISTO_LENGTH; i++)
             {
                 // 如果特征点的旋转角度变化量属于这三个组，则保留
-                if(i==ind1 || i==ind2 || i==ind3)
+                if(i==ind1 || i==ind2 || i==ind3 )
                     continue;
 
                 // 剔除掉不在前三的匹配对，因为他们不符合“主流旋转方向”  
@@ -489,6 +499,7 @@ namespace ORB_SLAM3
             }
         }
 
+        cout<<"SearchByBoW points = "<<nmatches<<endl;
         return nmatches;
     }
 
@@ -614,6 +625,7 @@ namespace ORB_SLAM3
 
         }
         //  Step 3 返回新的成功匹配的点对的数目
+        cout<<"SearchByProjection points 2 = "<<nmatches<<endl;
         return nmatches;
     }
 
@@ -727,7 +739,7 @@ namespace ORB_SLAM3
             }
 
         }
-
+        cout<<"SearchByProjection points 3 = "<<nmatches<<endl;
         return nmatches;
     }
 
@@ -744,8 +756,8 @@ namespace ORB_SLAM3
             rotHist[i].reserve(500);
 
         //! 原作者代码是 const float factor = 1.0f/HISTO_LENGTH; 是错误的，更改为下面代码
-        // const float factor = HISTO_LENGTH/360.0f;
-        const float factor = 1.0f/HISTO_LENGTH;
+         const float factor = HISTO_LENGTH/360.0f;
+//        const float factor = 1.0f/HISTO_LENGTH;
 
 
         // 匹配点对距离，注意是按照F2特征点数目分配空间
@@ -832,6 +844,7 @@ namespace ORB_SLAM3
                         // 前面factor = HISTO_LENGTH/360.0f 
                         // bin = rot / 360.of * HISTO_LENGTH 表示当前rot被分配在第几个直方图bin  
                         int bin = round(rot*factor);
+//                        int bin = round(rot/(360*factor));// 已经修改了前面factor的定义，这里就不用按照这个issue修改了 https://github.com/raulmur/ORB_SLAM2/issues/64
                         // 如果bin 满了又是一个轮回
                         if(bin==HISTO_LENGTH)
                             bin=0;
@@ -877,6 +890,7 @@ namespace ORB_SLAM3
                 vbPrevMatched[i1]=F2.mvKeysUn[vnMatches12[i1]].pt;
 
         return nmatches;
+        cout<<"SearchForInitialization points = "<<nmatches<<endl;
     }
 
     /*
@@ -912,8 +926,8 @@ namespace ORB_SLAM3
             rotHist[i].reserve(500);
 
         //! 原作者代码是 const float factor = 1.0f/HISTO_LENGTH; 是错误的，更改为下面代码   
-        // const float factor = HISTO_LENGTH/360.0f;
-        const float factor = 1.0f/HISTO_LENGTH;
+         const float factor = HISTO_LENGTH/360.0f;
+//        const float factor = 1.0f/HISTO_LENGTH;
 
         int nmatches = 0;
 
@@ -1038,7 +1052,7 @@ namespace ORB_SLAM3
                 }
             }
         }
-
+        cout<<"SearchByBoW points = "<<nmatches<<endl;
         return nmatches;
     }
 
@@ -1094,8 +1108,8 @@ namespace ORB_SLAM3
             rotHist[i].reserve(500);
 
         //! 原作者代码是 const float factor = 1.0f/HISTO_LENGTH; 是错误的，更改为下面代码   
-        // const float factor = HISTO_LENGTH/360.0f;
-        const float factor = 1.0f/HISTO_LENGTH;
+         const float factor = HISTO_LENGTH/360.0f;
+//        const float factor = 1.0f/HISTO_LENGTH;
 
         // We perform the matching over ORB that belong to the same vocabulary node (at a certain level)
         // Step 2 利用BoW加速匹配：只对属于同一节点(特定层)的ORB特征进行匹配
@@ -1236,7 +1250,7 @@ namespace ORB_SLAM3
 
                         }
 
-                        // Step 2.8 计算特征点kp2到kp1对应极线的距离是否小于阈值
+                        // Step 2.8 计算特征点kp2到kp1对应极线的距离是否小于阈值   @TODO-jixian 极线
                         if(bCoarse || pCamera1->epipolarConstrain(pCamera2,kp1,kp2,R12,t12,pKF1->mvLevelSigma2[kp1.octave],pKF2->mvLevelSigma2[kp2.octave])) // MODIFICATION_2
                         {
                             // bestIdx2，bestDist 是 kp1 对应 KF2中的最佳匹配点 index及匹配距离
@@ -1318,11 +1332,11 @@ namespace ORB_SLAM3
                 continue;
             vMatchedPairs.push_back(make_pair(i,vMatches12[i]));
         }
-
+        cout<<"SearchForTriangulation points = "<<nmatches<<endl;
         return nmatches;
     }
 
-    int ORBmatcher::Fuse(KeyFrame *pKF, const vector<MapPoint *> &vpMapPoints, const float th, const bool bRight)
+    int ORBmatcher::Fuse(KeyFrame *pKF, const vector<MapPoint *> &vpMapPoints, const float th, const bool bRight)//融合地图点和关键帧,改善和增强地图的质量，通过在关键帧中找到与已知地图点匹配的特征点，并进行相应的更新或融合。
     {
         GeometricCamera* pCamera;
         Sophus::SE3f Tcw;
@@ -1927,7 +1941,7 @@ namespace ORB_SLAM3
                 }
             }
         }
-
+        cout<<"SearchBySim3 points = "<<endl;
         return nFound;
     }
 
@@ -1958,8 +1972,8 @@ namespace ORB_SLAM3
             rotHist[i].reserve(500);
 
         //! 原作者代码是 const float factor = 1.0f/HISTO_LENGTH; 是错误的，更改为下面代码
-        // const float factor = HISTO_LENGTH/360.0f;
-        const float factor = 1.0f/HISTO_LENGTH;
+         const float factor = HISTO_LENGTH/360.0f;
+//        const float factor = 1.0f/HISTO_LENGTH;
 
         // Step 2 计算当前帧和前一帧的平移向量
         //当前帧的相机位姿
@@ -2179,7 +2193,7 @@ namespace ORB_SLAM3
                 }
             }
         }
-
+        cout<<"SearchByProjection points 4 = "<<endl;
         return nmatches;
     }
 
@@ -2282,15 +2296,16 @@ namespace ORB_SLAM3
                         nmatches++;
                         // Step 5 计算匹配点旋转角度差所在的直方图
                         if(mbCheckOrientation)
-                        {
+                        {// 如果需要检查关键点的方向
                             float rot = pKF->mvKeysUn[i].angle-CurrentFrame.mvKeysUn[bestIdx2].angle;
                             if(rot<0.0)
-                                rot+=360.0f;
-                            int bin = round(rot*factor);
+                                rot+=360.0f;    // 计算关键点之间的旋转差异，确保差异是正的（在0到360度之间）
+                            int bin = round(rot*factor);    // 将旋转差异映射到直方图的某个bin上
+//                            int bin = round(rot/(360*factor));    // 已经修改了前面factor的定义，这里就不用按照这个issue修改了 https://github.com/raulmur/ORB_SLAM2/issues/64
                             if(bin==HISTO_LENGTH)
-                                bin=0;
-                            assert(bin>=0 && bin<HISTO_LENGTH);
-                            rotHist[bin].push_back(bestIdx2);
+                                bin=0;  // 处理边界情况，确保bin在合理范围内（0到HISTO_LENGTH-1）
+                            assert(bin>=0 && bin<HISTO_LENGTH); // 断言，确保bin在合理范围内，如果不在合理范围内，触发断言错误 @TODO 错误位置 https://github.com/UZ-SLAMLab/ORB_SLAM3/issues/141
+                            rotHist[bin].push_back(bestIdx2);   // 将bestIdx2添加到对应的bin的直方图中
                         }
                     }
 
@@ -2319,7 +2334,7 @@ namespace ORB_SLAM3
                 }
             }
         }
-
+        cout<<"SearchByProjection points 5 = "<<endl;
         return nmatches;
     }
 

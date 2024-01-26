@@ -304,6 +304,7 @@ void Settings::readCamera1(cv::FileStorage &fSettings)
 
         if (sensor_ == System::STEREO || sensor_ == System::IMU_STEREO)
         {
+            cout<<"我真的好奇到底有没有用到overlappingBegin和overlappingEnd这俩参数"<<endl;
             int colBegin = readParameter<int>(fSettings, "Camera1.overlappingBegin", found);
             int colEnd = readParameter<int>(fSettings, "Camera1.overlappingEnd", found);
             vector<int> vOverlapping = {colBegin, colEnd};
@@ -564,6 +565,7 @@ void Settings::precomputeRectificationMaps()
     cv::Mat R_r1_u1, R_r2_u2;
     cv::Mat P1, P2, Q;
 
+    //todo 极线修正
     cv::stereoRectify(K1, camera1DistortionCoef(), K2, camera2DistortionCoef(), newImSize_,
                         R12, t12,
                         R_r1_u1, R_r2_u2, P1, P2, Q,

@@ -32,10 +32,16 @@ LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/../../../cmake_modules)
 
 # 要保证整个工程的opencv版本一致，包括dbow，源码以及ros相关的
 # 3 4 都可以正常运行
-find_package(OpenCV 3.2)
-   if(NOT OpenCV_FOUND)
-      message(FATAL_ERROR "OpenCV > 3.2 not found.")
-   endif()
+#find_package(OpenCV 3.2)
+#   if(NOT OpenCV_FOUND)
+#      message(FATAL_ERROR "OpenCV > 3.2 not found.")
+#   endif()
+set(cv_bridge_DIR /home/hl/Downloads/vision_opencv-noetic/cv_bridge/install/install320/usr/local/share/cv_bridge/cmake)  #在find_package前面
+find_package(cv_bridge)
+SET(OpenCV_DIR "/usr/local/opencv320")
+SET(OpenCV_INCLUDE_DIRS "/usr/local/opencv320/include")
+SET(OpenCV_LIBRARIES "/usr/local/opencv320/lib")
+FIND_PACKAGE(OpenCV 3.2)
 
 find_package(Eigen3 3.1.0 REQUIRED)
 find_package(Pangolin REQUIRED)
@@ -53,6 +59,7 @@ set(LIBS
 ${OpenCV_LIBS} 
 ${EIGEN3_LIBS}
 ${Pangolin_LIBRARIES}
+${cv_bridge_LIBRARIES}
 ${PROJECT_SOURCE_DIR}/../../../Thirdparty/DBoW2/lib/libDBoW2.so
 ${PROJECT_SOURCE_DIR}/../../../Thirdparty/g2o/lib/libg2o.so
 ${PROJECT_SOURCE_DIR}/../../../lib/libORB_SLAM3.so

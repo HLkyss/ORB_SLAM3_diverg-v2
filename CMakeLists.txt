@@ -2,15 +2,18 @@ cmake_minimum_required(VERSION 2.8)
 project(ORB_SLAM3)
 
 IF(NOT CMAKE_BUILD_TYPE)
-  SET(CMAKE_BUILD_TYPE Release)
+#  SET(CMAKE_BUILD_TYPE Release)
+  SET(CMAKE_BUILD_TYPE Debug)
 ENDIF()
 
 MESSAGE("Build type: " ${CMAKE_BUILD_TYPE})
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall   -O3")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall   -O3")  # 默认-O3  要看调试信息用O0
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall   -O3")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
+#set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -march=native")
+#set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 
 # Check C++11 or C++0x support
 include(CheckCXXCompilerFlag)
@@ -32,13 +35,19 @@ LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules)
 
 # 要保证整个工程的opencv版本一致，包括dbow，源码以及ros相关的
 # 3 4 都可以正常运行
-find_package(OpenCV 3.2)
-   if(NOT OpenCV_FOUND)
-      message(FATAL_ERROR "OpenCV > 3.2 not found.")
-   endif()
-
-MESSAGE("OPENCV VERSION:")
-MESSAGE(${OpenCV_VERSION})
+#find_package(OpenCV 3.2)
+#   if(NOT OpenCV_FOUND)
+#      message(FATAL_ERROR "OpenCV > 3.2 not found.")
+#   endif()
+#
+#MESSAGE("OPENCV VERSION:")
+#MESSAGE(${OpenCV_VERSION})
+set(cv_bridge_DIR /home/hl/Downloads/vision_opencv-noetic/cv_bridge/install/install320/usr/local/share/cv_bridge/cmake)  #在find_package前面
+find_package(cv_bridge)
+SET(OpenCV_DIR "/usr/local/opencv320")
+SET(OpenCV_INCLUDE_DIRS "/usr/local/opencv320/include")
+SET(OpenCV_LIBRARIES "/usr/local/opencv320/lib")
+FIND_PACKAGE(OpenCV 3.2)
 
 find_package(Eigen3 3.1.0 REQUIRED)
 find_package(Pangolin REQUIRED)

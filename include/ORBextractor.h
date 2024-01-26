@@ -46,7 +46,7 @@ public:
     
     enum {HARRIS_SCORE=0, FAST_SCORE=1 };
 
-    ORBextractor(int nfeatures, float scaleFactor, int nlevels,
+    ORBextractor(int nfeatures, float scaleFactor, int nlevels, //构造函数 ORBextractor 初始化了各种参数和变量，但实际的特征点提取操作在类的operator方法中进行
                  int iniThFAST, int minThFAST);
 
     ~ORBextractor(){}

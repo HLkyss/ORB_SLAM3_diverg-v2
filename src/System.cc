@@ -213,7 +213,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     //(it will live in the main thread of execution, the one that called this constructor)
     // 创建跟踪线程（主线程）,不会立刻开启,会在对图像和imu预处理后在main主线程种执行
     cout << "Seq. Name: " << strSequence << endl;
-    mpTracker = new Tracking(this, mpVocabulary, mpFrameDrawer, mpMapDrawer,
+    mpTracker = new Tracking(this, mpVocabulary, mpFrameDrawer, mpMapDrawer,    // todo-jixian 0.2
                              mpAtlas, mpKeyFrameDatabase, strSettingsFile, mSensor, settings_, strSequence);
 
     //Initialize the Local Mapping thread and launch
@@ -270,7 +270,8 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
     // Fix verbosity
     // 打印输出中间的信息，设置为安静模式
-    Verbose::SetTh(Verbose::VERBOSITY_QUIET);
+//    Verbose::SetTh(Verbose::VERBOSITY_QUIET);
+    Verbose::SetTh(Verbose::VERBOSITY_DEBUG);
 
 }
 
@@ -283,25 +284,35 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
     }
 
     cv::Mat imLeftToFeed, imRightToFeed;
-    if(settings_ && settings_->needToRectify()){
+
+    if(0){    //pinhole相机模型会使用极线修正 diy 使用原图，不极线修正
+//    if(settings_ && settings_->needToRectify()){    //pinhole相机模型会使用， todo-jixian 1. 极线修正
         cv::Mat M1l = settings_->M1l();
         cv::Mat M2l = settings_->M2l();
         cv::Mat M1r = settings_->M1r();
         cv::Mat M2r = settings_->M2r();
 
-        cv::remap(imLeft, imLeftToFeed, M1l, M2l, cv::INTER_LINEAR);
+        cv::remap(imLeft, imLeftToFeed, M1l, M2l, cv::INTER_LINEAR);//执行极线校正：如果需要极线校正，使用 cv::remap 函数来应用预先计算的校正映射。M1l、M2l、M1r 和 M2r 是校正映射矩阵，它们是通过相机校正过程预先计算得到的。这些矩阵用于调整图像，使得左右图像中的对应点在水平方向上对齐。
         cv::remap(imRight, imRightToFeed, M1r, M2r, cv::INTER_LINEAR);
+        //cv::imshow("imLeftToFeed", imLeftToFeed);
+        //cv::imshow("imRightToFeed", imRightToFeed);
+        //保存图像文件
+//        cv::imwrite("/media/hl/Stuff/ubuntu_share_2/Dataset/ue_stereo_test/test/imLeftToFeed.png", imLeftToFeed);
+//        cv::imwrite("/media/hl/Stuff/ubuntu_share_2/Dataset/ue_stereo_test/test/imRightToFeed.png", imRightToFeed);
+        //cv::waitKey(1);
+        //关闭可视化窗口
+        //cv::destroyAllWindows();
     }
     else if(settings_ && settings_->needToResize()){
         cv::resize(imLeft,imLeftToFeed,settings_->newImSize());
         cv::resize(imRight,imRightToFeed,settings_->newImSize());
     }
-    else{
+    else{   // todo-jixian 1. 鱼眼图像不修正，见github的readme：For FishEye camera model, rectification is not required since system works with original images
         imLeftToFeed = imLeft.clone();
         imRightToFeed = imRight.clone();
     }
 
-    // Check mode change
+    // Check mode change    检查是否需要改变 SLAM 系统的工作模式
     {
         unique_lock<mutex> lock(mMutexMode);
         if(mbActivateLocalizationMode)
@@ -325,7 +336,7 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
         }
     }
 
-    // Check reset
+    // Check reset  检查是否需要重置 SLAM 系统
     {
         unique_lock<mutex> lock(mMutexReset);
         if(mbReset)
@@ -341,7 +352,7 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
         }
     }
 
-    if (mSensor == System::IMU_STEREO)
+    if (mSensor == System::IMU_STEREO)  //如果传感器类型是 IMU_STEREO，则通过循环处理传入的 IMU 数据，调用 mpTracker->GrabImuData 将 IMU 数据传递给跟踪器。
         for(size_t i_imu = 0; i_imu < vImuMeas.size(); i_imu++)
             mpTracker->GrabImuData(vImuMeas[i_imu]);
 
@@ -350,12 +361,12 @@ Sophus::SE3f System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, 
 
     // std::cout << "out grabber" << std::endl;
 
-    unique_lock<mutex> lock2(mMutexState);
+    unique_lock<mutex> lock2(mMutexState);  //更新状态： 获取一些跟踪器内部状态信息，如当前帧的状态、跟踪到的地图点、跟踪到的关键点等。
     mTrackingState = mpTracker->mState;
     mTrackedMapPoints = mpTracker->mCurrentFrame.mvpMapPoints;
     mTrackedKeyPointsUn = mpTracker->mCurrentFrame.mvKeysUn;
 
-    return Tcw;
+    return Tcw; //返回位姿
 }
 
 Sophus::SE3f System::TrackRGBD(const cv::Mat &im, const cv::Mat &depthmap, const double &timestamp, const vector<IMU::Point>& vImuMeas, string filename)

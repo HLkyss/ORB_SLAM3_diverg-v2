@@ -261,6 +261,9 @@ protected:
     ORBextractor* mpORBextractorLeft, *mpORBextractorRight;
     ORBextractor* mpIniORBextractor;
 
+    //人为设置多的提取点用于大角度初始化
+    ORBextractor* mpORBextractorLeft_init, *mpORBextractorRight_init;
+
     //BoW
     ORBVocabulary* mpORBVocabulary;
     KeyFrameDatabase* mpKeyFrameDB;

@@ -27,6 +27,7 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
+#include <ros/console.h>
 
 #include<opencv2/core/core.hpp>
 
@@ -109,9 +110,11 @@ int main(int argc, char **argv)
 
     message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
     message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/right/image_raw", 1);
+//    message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/fisheye1/image_raw", 1);
+//    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "/camera/fisheye2/image_raw", 1);
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
     message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
-    sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));
+    sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));//将 ImageGrabber::GrabStereo 函数与 igb 对象绑定在一起，并将这个绑定后的函数对象注册为 TimeSynchronizer 的回调函数。这样，当 TimeSynchronizer 接收到同步的图像消息时，就会调用 ImageGrabber::GrabStereo 函数，从而完成对图像消息的处理。
 
     ros::spin();
 
@@ -155,6 +158,7 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
 
     if(do_rectify)
     {
+        //ROS_INFO("do_rectify!!!!!!!!!do_rectify!!!!!!!!!do_rectify!!!!!!!!!");
         cv::Mat imLeft, imRight;
         cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
         cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
@@ -162,6 +166,7 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
     }
     else
     {
+        //ROS_INFO("track stereo!!!!track stereo!!!!track stereo!!!!");
         mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
     }
 

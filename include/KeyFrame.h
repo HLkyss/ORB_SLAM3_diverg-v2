@@ -178,7 +178,7 @@ class KeyFrame
         ar & const_cast<int&>(NRight);
         serializeSophusSE3<Archive>(ar, mTlr, version);
         serializeVectorKeyPoints<Archive>(ar, mvKeysRight, version);
-        ar & mGridRight;
+        ar & mGridRight;                //https://github.com/UZ-SLAMLab/ORB_SLAM3/issues/141 @TODO 不知道这个解答说的是不是这个地方，本身就不是注释的
 
         // Inertial variables
         ar & mImuBias;

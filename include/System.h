@@ -44,13 +44,13 @@
 namespace ORB_SLAM3
 {
 
-class Verbose
+class Verbose   //用于控制程序输出日志或控制台消息详细级别的实用类
 {
 public:
-    enum eLevel
+    enum eLevel //不同的详细级别
     {
-        VERBOSITY_QUIET=0,
-        VERBOSITY_NORMAL=1,
+        VERBOSITY_QUIET=0,  //最低的详细级别，通常用于只显示关键信息
+        VERBOSITY_NORMAL=1, //正常的详细级别，适用于常规程序执行
         VERBOSITY_VERBOSE=2,
         VERBOSITY_VERY_VERBOSE=3,
         VERBOSITY_DEBUG=4
@@ -261,7 +261,7 @@ private:
 
     string mStrVocabularyFilePath;
 
-    Settings* settings_;
+    Settings* settings_;// System类中创建了Settings类的对象settings_，用于读取配置文件
 };
 
 }// namespace ORB_SLAM

@@ -63,7 +63,7 @@ cv::Mat FrameDrawer::DrawFrame(float imageScale)
         unique_lock<mutex> lock(mMutex);
         state=mState;
         if(mState==Tracking::SYSTEM_NOT_READY)
-            mState=Tracking::NO_IMAGES_YET;
+            mState=Tracking::NO_IMAGES_YET;//这里mState从-1变成0
 
         mIm.copyTo(im);
 

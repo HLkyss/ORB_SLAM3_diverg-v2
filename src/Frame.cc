@@ -101,7 +101,145 @@ Frame::Frame(const Frame &frame)
 #endif
 }
 
-// 立体匹配模式下的双目
+//  todo-jixian diy：传入外参，立体匹配模式下的双目 2-1. 用pinhole模型时会进入，二者创建的帧frame不同
+Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, ORBextractor* extractorLeft, ORBextractor* extractorRight, ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, Sophus::SE3f Tlr, Frame* pPrevF, const IMU::Calib &ImuCalib)
+        :Tlr_(Tlr), mpcpi(NULL), mpORBvocabulary(voc),mpORBextractorLeft(extractorLeft),mpORBextractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)), mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
+         mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false),
+         mpCamera(pCamera) ,mpCamera2(nullptr), mbHasPose(false), mbHasVelocity(false)
+{
+    imgLeft = imLeft.clone();// diy 这几句之前pin模型的frame里没有，只有kb的frame有，也是自己加的，为了后面保存匹配结果图片
+    imgRight = imRight.clone();
+    fx = K.at<float>(0,0);
+    fy = K.at<float>(1,1);
+    cx = K.at<float>(0,2);
+    cy = K.at<float>(1,2);
+
+    // Frame ID
+    // Step 1 帧的ID 自增
+    mnId=nNextId++;
+
+    // Scale Level Info
+    // Step 2 计算图像金字塔的参数
+    // 获取图像金字塔的层数
+    mnScaleLevels = mpORBextractorLeft->GetLevels();
+    // 获得层与层之间的缩放比
+    mfScaleFactor = mpORBextractorLeft->GetScaleFactor();
+    // 计算上面缩放比的对数
+    mfLogScaleFactor = log(mfScaleFactor);
+    // 获取每层图像的缩放因子
+    mvScaleFactors = mpORBextractorLeft->GetScaleFactors();
+    // 同样获取每层图像缩放因子的倒数
+    mvInvScaleFactors = mpORBextractorLeft->GetInverseScaleFactors();
+    // 高斯模糊的时候，使用的方差
+    mvLevelSigma2 = mpORBextractorLeft->GetScaleSigmaSquares();
+    // 获取sigma^2的倒数
+    mvInvLevelSigma2 = mpORBextractorLeft->GetInverseScaleSigmaSquares();
+
+    // ORB extraction
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
+#endif
+    // Step 3 对左目右目图像提取ORB特征点, 第一个参数0-左图， 1-右图。为加速计算，同时开了两个线程计算
+    thread threadLeft(&Frame::ExtractORB,this,0,imLeft,0,0);
+    // 对右目图像提取orb特征
+    thread threadRight(&Frame::ExtractORB,this,1,imRight,0,0);
+    // 等待两张图像特征点提取过程完成
+    threadLeft.join();
+    threadRight.join();
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
+
+mTimeORB_Ext = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndExtORB - time_StartExtORB).count();
+#endif
+
+    // mvKeys中保存的是左图像中的特征点，这里是获取左侧图像中特征点的个数
+    N = mvKeys.size();
+
+    // 如果左图像中没有成功提取到特征点那么就返回，也意味这这一帧的图像无法使用
+    if(mvKeys.empty())
+        return;
+
+    // Step 4 用OpenCV的矫正函数、内参对提取到的特征点进行矫正
+    UndistortKeyPoints();
+
+#ifdef REGISTER_TIMES
+    std::chrono::steady_clock::time_point time_StartStereoMatches = std::chrono::steady_clock::now();
+#endif
+
+    // Step 5 计算双目间特征点的匹配，只有匹配成功的特征点会计算其深度,深度存放在 mvDepth
+    // mvuRight中存储的应该是左图像中的点所匹配的在右图像中的点的横坐标（纵坐标相同）
+//    ComputeStereoMatches();
+    ComputeStereoMatches2(); // diy 做出的修改就是在这里传入了外参，然后用非极线修正，而是沿着非水平极限搜索
+
+#ifdef REGISTER_TIMES
+        std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
+
+    mTimeStereoMatch = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndStereoMatches - time_StartStereoMatches).count();
+#endif
+
+    // 初始化本帧的地图点
+    mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(NULL));
+    mvbOutlier = vector<bool>(N,false);
+    mmProjectPoints.clear();
+    mmMatchedInImage.clear();
+
+
+    // This is done only for the first Frame (or after a change in the calibration)
+    //  Step 5 计算去畸变后图像边界，将特征点分配到网格中。这个过程一般是在第一帧或者是相机标定参数发生变化之后进行
+    if(mbInitialComputations)
+    {
+        // 计算去畸变后图像的边界
+        ComputeImageBounds(imLeft);
+
+        // 表示一个图像像素相当于多少个图像网格列（宽）
+        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/(mnMaxX-mnMinX);
+        // 表示一个图像像素相当于多少个图像网格行（高）
+        mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/(mnMaxY-mnMinY);
+
+
+
+        fx = K.at<float>(0,0);
+        fy = K.at<float>(1,1);
+        cx = K.at<float>(0,2);
+        cy = K.at<float>(1,2);
+        // 猜测是因为这种除法计算需要的时间略长，所以这里直接存储了这个中间计算结果
+        invfx = 1.0f/fx;
+        invfy = 1.0f/fy;
+
+        // 特殊的初始化过程完成，标志复位
+        mbInitialComputations=false;
+    }
+
+    // 双目相机基线长度
+    mb = mbf/fx;
+
+    if(pPrevF)
+    {
+        if(pPrevF->HasVelocity())
+            SetVelocity(pPrevF->GetVelocity());
+    }
+    else
+    {
+        mVw.setZero();
+    }
+
+    mpMutexImu = new std::mutex();
+
+    //Set no stereo fisheye information
+    Nleft = -1;
+    Nright = -1;
+    mvLeftToRightMatch = vector<int>(0);
+    mvRightToLeftMatch = vector<int>(0);
+    mvStereo3Dpoints = vector<Eigen::Vector3f>(0);
+    monoLeft = -1;
+    monoRight = -1;
+
+    // Step 6 将特征点分配到图像网格中
+    // 上个版本这句话放在了new 锁那个上面，放在目前这个位置更合理，因为要把一些当前模式不用的参数赋值，函数里面要用
+    AssignFeaturesToGrid();
+}
+
+// 立体匹配模式下的双目 // todo-jixian 2-1. 用pinhole模型时会进入，二者创建的帧frame不同
 Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, ORBextractor* extractorLeft, ORBextractor* extractorRight, ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, Frame* pPrevF, const IMU::Calib &ImuCalib)
     :mpcpi(NULL), mpORBvocabulary(voc),mpORBextractorLeft(extractorLeft),mpORBextractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)), mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
      mImuCalib(ImuCalib), mpImuPreintegrated(NULL), mpPrevFrame(pPrevF),mpImuPreintegratedFrame(NULL), mpReferenceKF(static_cast<KeyFrame*>(NULL)), mbIsSet(false), mbImuPreintegrated(false),
@@ -510,13 +648,20 @@ void Frame::AssignFeaturesToGrid()
  * @param x0 界限
  * @param x1 界限
  */
-void Frame::ExtractORB(int flag, const cv::Mat &im, const int x0, const int x1)
+void Frame::ExtractORB(int flag, const cv::Mat &im, const int x0, const int x1) //thread threadLeft(&Frame::ExtractORB,this,0,imLeft,0,0)调用;thread threadLeft(&Frame::ExtractORB,this,0,imLeft,static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[1])调用
 {
     vector<int> vLapping = {x0,x1};
     // 判断是左图还是右图
     if(flag==0)
         // 左图的话就套使用左图指定的特征点提取器，并将提取结果保存到对应的变量中 
-        monoLeft = (*mpORBextractorLeft)(im,cv::Mat(),mvKeys,mDescriptors,vLapping);
+        monoLeft = (*mpORBextractorLeft)(im,cv::Mat(),mvKeys,mDescriptors,vLapping);// todo 运行到这里进入int ORBextractor::operator()
+        /*   在C++中，当你看到类似 object(some_parameters) 的代码，这通常意味着调用了该对象的 operator() 方法。这种对象被称为函数对象（functor）。
+             在你的例子中，(*mpORBextractorLeft)(im, cv::Mat(), mvKeys, mDescriptors, vLapping) 表示调用了 mpORBextractorLeft 指向的对象的 operator() 方法。
+             mpORBextractorLeft 是一个指向 ORBextractor 类型对象的指针; (*mpORBextractorLeft) 解引用该指针，得到该对象。 后面的括号 (...) 表示对该对象执行 operator() 方法
+             在 ORBextractor 类中，operator() 已经被重载以执行特定的操作，这里是图像特征提取的操作。
+         operator() 不会在创建对象时自动调用。它只有在对象被像函数一样调用时才会执行。这种操作通常被称为“调用函数对象”或“使用重载的函数调用操作符”.
+         operator() 是一个可以重载的操作符，使得对象能夠像函数一样被使用。这个操作符需要显式调用，通常通过将对象后接一对括号（包含任何必要的参数）来实现。
+         直到你像这样使用对象时，operator() 才会被调用。仅创建对象并不会触发 operator() 的调用。*/
     else
         // 右图的话就需要使用右图指定的特征点提取器，并将提取结果保存到对应的变量中 
         monoRight = (*mpORBextractorRight)(im,cv::Mat(),mvKeysRight,mDescriptorsRight,vLapping);
@@ -730,7 +875,10 @@ bool Frame::isInFrustum(MapPoint *pMP, float viewingCosLimit)
 
         // 如果大于给定的阈值 cos(60°)=0.5，认为这个点方向太偏了，重投影不可靠，返回false
         if(viewCos<viewingCosLimit)
+        {
+            cout<<"大于给定的阈值 cos(60°)=0.5，认为这个点方向太偏了，重投影不可靠，返回false"<<endl;
             return false;
+        }
 
         // Predict scale in the image
         // Step 6 根据地图点到光心的距离来预测一个尺度（仿照特征点金字塔层级）
@@ -1046,6 +1194,7 @@ void Frame::UndistortKeyPoints()
         kp.pt.x=mat.at<float>(i,0);
         kp.pt.y=mat.at<float>(i,1);
         mvKeysUn[i]=kp;
+        cout<<"去畸变后特征点坐标："<<kp.pt.x<<", "<<kp.pt.y;
     }
 
 }
@@ -1357,6 +1506,408 @@ void Frame::ComputeStereoMatches()
     }
 }
 
+void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
+{
+    /*两帧图像稀疏立体匹配（即：ORB特征点匹配，非逐像素的密集匹配，但依然满足行对齐）
+     * 输入：两帧立体矫正后的图像img_left 和 img_right 对应的orb特征点集
+     * 过程：
+          1. 行特征点统计. 统计img_right每一行上的ORB特征点集，便于使用立体匹配思路(行搜索/极线搜索）进行同名点搜索, 避免逐像素的判断.
+          2. 粗匹配. 根据步骤1的结果，对img_left第i行的orb特征点pi，在img_right的第i行上的orb特征点集中搜索相似orb特征点, 得到qi
+          3. 精确匹配. 以点qi为中心，半径为r的范围内，进行块匹配（归一化SAD），进一步优化匹配结果
+          4. 亚像素精度优化. 步骤3得到的视差为uchar/int类型精度，并不一定是真实视差，通过亚像素差值（抛物线插值)获取float精度的真实视差
+          5. 最优视差值/深度选择. 通过胜者为王算法（WTA）获取最佳匹配点。
+          6. 删除离缺点(outliers). 块匹配相似度阈值判断，归一化sad最小，并不代表就一定是正确匹配，比如光照变化、弱纹理等会造成误匹配
+     * 输出：稀疏特征点视差图/深度图（亚像素精度）mvDepth 匹配结果 mvuRight
+     */
+    //! diy 原来这段代码是针对极线对齐处理后的图像进行的，因此极线是水平的，所以沿极线搜索就是沿行搜索。但是，如果原图像没有经过极线对齐处理，那就需要沿极线搜索而不是沿行搜索了，这时需要修改代码
+
+    cv::Mat K = (cv::Mat_<double>(3, 3) << fx, 0, cx,
+            0, fy, cy,
+            0, 0, 1);
+    //读取yaml中的"Stereo.T_c1_c2"
+    Sophus::SE3f T = Tlr_;
+    //求逆
+    T = T.inverse();
+    cout<<"T.matrix() = "<<T.matrix()<<endl;
+    Eigen::Matrix4f T_matrix = T.matrix();
+    // 转换为 OpenCV 矩阵，使用 CV_32F，并手动复制数据
+    cv::Mat T_cv(4, 4, CV_64F);
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            T_cv.at<double>(i, j) = T_matrix(i, j);  // Transpose the data during copying
+        }
+    }
+    cout << "T_cv = " << T_cv << endl;
+
+    // 从 4x4 矩阵中提取 3x3 旋转矩阵部分
+    cv::Mat R = T_cv(cv::Rect(0, 0, 3, 3));
+    cv::Mat t = T_cv(cv::Rect(3, 0, 1, 3));
+    //输出R和t
+    cout<<"R = "<<R<<endl;
+    cout<<"t = "<<t<<endl;
+    // 计算平移向量的反对称矩阵
+    cv::Mat tx = (cv::Mat_<double>(3, 3) << 0, -t.at<double>(2, 0), t.at<double>(1, 0),
+            t.at<double>(2, 0), 0, -t.at<double>(0, 0),
+            -t.at<double>(1, 0), t.at<double>(0, 0), 0);
+    //输出tx的类型
+    cout<<"tx.type() = "<<tx.type()<<endl;
+    //输出R的类型
+    cout<<"R.type() = "<<R.type()<<endl;
+    // 计算本质矩阵
+    cv::Mat E = tx * R;
+    // 计算基础矩阵
+    cv::Mat K_inv = K.inv();
+    cout<<"K_inv = "<<K_inv<<endl;
+    cv::Mat F = K_inv.t() * E * K_inv;
+//    cv::Mat F = K.inv().t() * E * K.inv();
+    cout<<"F = "<<F<<endl;
+
+    // 为匹配结果预先分配内存，数据类型为float型
+    // mvuRight存储右图匹配点索引
+    // mvDepth存储特征点的深度信息
+    mvuRight = vector<float>(N,-1.0f);
+    mvDepth = vector<float>(N,-1.0f);
+
+    // orb特征相似度阈值  -> mean ～= (max  + min) / 2
+    const int thOrbDist = (ORBmatcher::TH_HIGH+ORBmatcher::TH_LOW)/2;
+
+    // 金字塔顶层（0层）图像高 nRows
+    const int nRows = mpORBextractorLeft->mvImagePyramid[0].rows;
+
+    // 右图特征点数量，N表示数量 r表示右图，且不能被修改
+    const int Nr = mvKeysRight.size();
+
+    // 对于立体矫正后的两张图，在列方向(x)存在最大视差maxd和最小视差mind
+    // 也即是左图中任何一点p，在右图上的匹配点的范围为应该是[p - maxd, p - mind], 而不需要遍历每一行所有的像素
+    // maxd = baseline * length_focal / minZ
+    // mind = baseline * length_focal / maxZ
+    // Set limits for search
+    const float minZ = mb;
+    const float minD = 0;   //最小视差为0，对应无穷远
+    const float maxD = mbf/minZ;    //最大视差对应的距离是相机的基线，这个值现在应该变大，但有没有必要求出来？
+
+    // For each left keypoint search a match in the right image
+    vector<pair<int, int> > vDistIdx;// 保存sad块匹配相似度和左图特征点索引
+    vDistIdx.reserve(N);
+
+    // 遍历左图的每个特征点
+    for (const auto& kpL : mvKeys) {
+        // 将特征点转换为齐次坐标
+        cv::Mat ptL = (cv::Mat_<double>(3,1) << kpL.pt.x, kpL.pt.y, 1);
+
+        // 1. 计算对应的极线在右图中的方程：l' = F * pt
+        cv::Mat lineR = F * ptL;
+        // 极线方程：Ax + By + C = 0
+        double A = lineR.at<double>(0,0);
+        double B = lineR.at<double>(1,0);
+        double C = lineR.at<double>(2,0);
+
+        //在左目上画出当前特征点
+        cv::Mat cam0=imgLeft.clone();
+        cv::Mat cam1=imgRight.clone();
+        cv::circle(cam0, kpL.pt, 4, cv::Scalar(0, 0, 255), 2);
+        //在右目图上画出极线
+        cv::Point2f pt1, pt2;
+        pt1.x = 0;
+        pt1.y = static_cast<float>(-C / B);
+        pt2.x = static_cast<float>(cam1.cols);
+        pt2.y = static_cast<float>(-(A * pt2.x + C) / B);
+        cv::line(cam1, pt1, pt2, cv::Scalar(0, 0, 255), 5);
+        cv::Mat imgMatch;
+        cv::hconcat(cam0, cam1, imgMatch);
+        auto now = std::chrono::system_clock::now();
+        auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        std::string matchesFilename =
+                "/home/hl/project/ORB_SLAM3_detailed_comments-master/demo/single_match/match_" + std::to_string(timestamp) +
+                ".png";
+//        cv::imwrite(matchesFilename, imgMatch);
+////////////////////////////////////////////////////////////////////////////////// 截止到这里没问题
+
+        // 获取尺度相关的偏移量r
+        float r = 2.0f * mvScaleFactors[kpL.octave];
+
+        const int &levelL = kpL.octave;
+        const float &vL = kpL.pt.y;
+        const float &uL = kpL.pt.x;
+
+//        const float minU = uL-maxD;// 计算理论上的最佳搜索范围
+        const float minU = 0;// 先不算了，直接给0
+        const float maxU = uL-minD;
+        if(maxU<0)// 最大搜索范围小于0，说明无匹配点
+            continue;
+
+        int bestDist = ORBmatcher::TH_HIGH;// 初始化最佳相似度，用最大相似度，以及最佳匹配点索引
+        size_t bestIdxR = 0;
+
+        int iL=&kpL - &mvKeys[0];// 计算了当前特征点 kpL 在 mvKeys 中的索引，以便获取对应的描述子
+        const cv::Mat &dL = mDescriptors.row(iL);
+
+        // 2. 粗匹配 在右图的极线上进行匹配点搜索
+        for (const auto& kpR : mvKeysRight) {
+
+            // 左图特征点il与带匹配点ic的空间尺度差超过2，放弃
+            if(kpR.octave<levelL-1 || kpR.octave>levelL+1)
+                continue;
+
+            const float &uR = kpR.pt.x;// 使用列坐标(x)进行匹配，和stereomatch一样
+            // 超出理论搜索范围[minU, maxU]，可能是误匹配，放弃
+            if(uR>=minU && uR<=maxU)
+            {
+                // 计算右图特征点到极线的距离
+                float distance = std::abs(kpR.pt.x * A + kpR.pt.y * B + C) /
+                                 std::sqrt(A * A + B * B);  //通过计算距离并设定阈值，实现了对在极线上下平移 rr 范围内的特征点的筛选，不用真的计算平移后的极限范围
+
+                // 如果距离小于某个阈值，则视为潜在匹配
+                if (distance < r) { // 在极线上下平移r的范围内搜索右目特征点
+                    // 执行粗匹配和精匹配逻辑
+                    // 粗匹配逻辑：大致过程为：遍历极线上下平移r的范围内的右目特征点，最小的描述子距离对应的点就是得到的匹配点
+
+                    int iR=&kpR - &mvKeysRight[0];
+                    const cv::Mat &dR = mDescriptorsRight.row(iR);// 计算匹配点il和待匹配点ic的相似度dist
+                    const int dist = ORBmatcher::DescriptorDistance(dL,dR);
+
+                    if(dist<bestDist)// 统计最小相似度及其对应的列坐标(x)
+                    {
+                        bestDist = dist;
+                        bestIdxR = iR;
+                    }
+                }
+            }
+        }
+        cout<<"bestIdxR = "<<bestIdxR<<endl;
+        cout<<"bestDist = "<<bestDist<<endl;
+
+        if(mvScaleFactors[kpL.octave] ==1 && mvScaleFactors[mvKeysRight[bestIdxR].octave]==1)//先排除尺度问题
+        {
+            cv::Mat imgMatches1;
+            cv::hconcat(imgLeft, imgRight, imgMatches1);
+            cv::Point2f left_point = kpL.pt / mvScaleFactors[kpL.octave];
+            cv::Point2f right_point = cv::Point2f(mvKeysRight[bestIdxR].pt.x / mvScaleFactors[mvKeysRight[bestIdxR].octave],mvKeysRight[bestIdxR].pt.y / mvScaleFactors[mvKeysRight[bestIdxR].octave]);
+    //        cv::Point2f right_point = cv::Point2f(mvKeysRight[bestIdxR].pt.x / mvScaleFactors[mvKeysRight[bestIdxR].octave]+imgLeft.cols,mvKeysRight[bestIdxR].pt.y / mvScaleFactors[mvKeysRight[bestIdxR].octave]);
+    //        cv::Point2f left_point = kpL.pt;
+    //        cv::Point2f right_point = cv::Point2f(mvKeysRight[bestIdxR].pt.x + imgLeft.cols, mvKeysRight[bestIdxR].pt.y);
+            cout<<"left scale = "<<mvScaleFactors[kpL.octave]<<endl;//大于等于1
+            cout<<"right scale = "<<mvScaleFactors[mvKeysRight[bestIdxR].octave]<<endl;//大于等于1
+            cout<<"left_point = ("<<left_point.x<<", "<<left_point.y<<")"<<endl;
+            cout<<"right_point = ("<<right_point.x-imgLeft.cols<<", "<<right_point.y<<")"<<endl;
+            // 绘制匹配连线
+            cv::line(imgMatches1, left_point, cv::Point2f(right_point.x + imgLeft.cols, right_point.y), cv::Scalar(0, 255, 0), 1);
+            cv::circle(imgMatches1, left_point, 2, cv::Scalar(255, 0, 0), -1);
+            cv::circle(imgMatches1, cv::Point2f(right_point.x + imgLeft.cols, right_point.y), 2, cv::Scalar(0, 0, 255), -1);
+
+            auto now1 = std::chrono::system_clock::now();
+            auto timestamp1 = std::chrono::duration_cast<std::chrono::seconds>(now1.time_since_epoch()).count();
+            std::string matchesFilename1 =
+                    "/home/hl/project/ORB_SLAM3_detailed_comments-master/demo/raw_matches/matches_" + std::to_string(timestamp1) +
+                    ".png";
+            cv::imwrite(matchesFilename1, imgMatches1); //有问题，怀疑是得到的对应的匹配点坐标可能位于不同的金字塔层级上
+        }
+
+//        for (const auto &idxPair: vDistIdx) {   //vDistIdx保存sad块匹配相似度和左图特征点索引
+//            const cv::KeyPoint &kpL = mvKeys[idxPair.second];
+//            const cv::KeyPoint &kpR = mvKeysRight[mvuRight[idxPair.second]];
+//
+//            // 调整坐标到原始图像层级
+//            cv::Point2f ptL = kpL.pt * mvScaleFactors[kpL.octave];
+//            cv::Point2f ptR = kpR.pt * mvScaleFactors[kpR.octave];
+//
+//            // 绘制匹配连线
+//            cv::line(imgMatches1, ptL, cv::Point2f(ptR.x + imgLeft.cols, ptR.y), cv::Scalar(0, 255, 0), 1);
+//            cv::circle(imgMatches1, ptL, 2, cv::Scalar(255, 0, 0), -1);
+//            cv::circle(imgMatches1, cv::Point2f(ptR.x + imgLeft.cols, ptR.y), 2, cv::Scalar(0, 0, 255), -1);
+//
+//        }
+//        auto now1 = std::chrono::system_clock::now();
+//        auto timestamp1 = std::chrono::duration_cast<std::chrono::seconds>(now1.time_since_epoch()).count();
+//        std::string matchesFilename1 =
+//                "/home/hl/project/ORB_SLAM3_detailed_comments-master/demo/raw_matches/matches_" + std::to_string(timestamp1) +
+//                ".png";
+//        cv::imwrite(matchesFilename1, imgMatches1); //有问题，怀疑是得到的对应的匹配点坐标可能位于不同的金字塔层级上
+
+/////////////////////////////////////////////////////////////////////////
+
+        // Subpixel match by correlation
+        // 如果刚才匹配过程中的最佳描述子距离小于给定的阈值
+        // Step 3. 精确匹配.
+        if(bestDist<thOrbDist)
+        {
+            // coordinates in image pyramid at keypoint scale
+            // 计算右图特征点x坐标和对应的金字塔尺度
+            const float uR0 = mvKeysRight[bestIdxR].pt.x;
+            const float scaleFactor = mvInvScaleFactors[kpL.octave];
+            // 尺度缩放后的左右图特征点坐标   （特征点的原始坐标（uL 和 vL）被调整为对应尺度层级的坐标（scaleduL 和 scaledvL）。这是通过将原始坐标乘以特征点的尺度因子来实现的。这样做的目的是为了在进行特征点匹配时，能够在相同的尺度下比较特征点）
+            const float scaleduL = round(kpL.pt.x*scaleFactor);
+            const float scaledvL = round(kpL.pt.y*scaleFactor);
+            const float scaleduR0 = round(uR0*scaleFactor);
+
+            // sliding window search
+            // 滑动窗口搜索, 类似模版卷积或滤波
+            // w表示sad相似度的窗口半径
+            const int w = 5;
+            // 提取左图中，以特征点(scaleduL,scaledvL)为中心, 半径为w的图像快patch
+            cv::Mat IL = mpORBextractorLeft->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduL-w,scaleduL+w+1);
+
+            // 初始化最佳相似度
+            int bestDist = INT_MAX;
+            // 通过滑动窗口搜索优化，得到的列坐标偏移量
+            int bestincR = 0;
+            // 滑动窗口的滑动范围为（-L, L）
+            const int L = 5;
+            // 初始化存储图像块相似度
+            vector<float> vDists;
+            vDists.resize(2*L+1);
+
+            // 计算滑动窗口滑动范围的边界，因为是块匹配，还要算上图像块的尺寸
+            // 列方向起点 iniu = r0 + 最大窗口滑动范围 - 图像块尺寸   //! 为什么是“+最大窗口滑动范围”？？？
+            // 列方向终点 eniu = r0 + 最大窗口滑动范围 + 图像块尺寸 + 1
+            // 此次 + 1 和下面的提取图像块是列坐标+1是一样的，保证提取的图像块的宽是2 * w + 1
+            const float iniu = scaleduR0+L-w;   //! 不应该是scaleduR0-L-w？？？
+            const float endu = scaleduR0+L+w+1;
+            // 判断搜索是否越界
+            if(iniu<0 || endu >= mpORBextractorRight->mvImagePyramid[kpL.octave].cols)
+                continue;
+
+            // 在搜索范围内从左到右滑动，并计算图像块相似度
+            // 计算极线的斜率
+            double slope = -A / B;
+            // 确定在图像坐标系中水平方向和垂直方向的步进值
+            double stepX = 1.0 / sqrt(1.0 + slope * slope);
+            double stepY = slope * stepX;
+            for(int incR=-L; incR<=+L; incR++)
+            {
+                // 计算在图像坐标系中的偏移量
+                double offsetX = incR * stepX;
+                double offsetY = incR * stepY;
+
+                // 四舍五入到最近的整数，确保像素坐标是整数
+                int offsetX_int = cvRound(offsetX);
+                int offsetY_int = cvRound(offsetY);
+
+                // 提取右图中，以特征点(scaleduR0, scaledvR0)为中心，半径为w的图像块patch
+                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvL - w, scaledvL + w + 1).colRange(scaleduR0 + offsetX_int - w, scaleduR0 + offsetX_int + w + 1);
+
+                // sad 计算
+                float dist = cv::norm(IL,IR,cv::NORM_L1);
+                // 统计最小sad和偏移量
+                if(dist<bestDist)
+                {
+                    bestDist =  dist;
+                    bestincR = incR;
+                }
+
+                // L+incR 为refine后的匹配点列坐标(x)
+                vDists[L+incR] = dist;
+            }
+
+            // 搜索窗口越界判断ß
+            if(bestincR==-L || bestincR==L)
+                continue;
+
+            // Step 4. 亚像素插值, 使用最佳匹配点及其左右相邻点构成抛物线
+            // 使用3点拟合抛物线的方式，用极小值代替之前计算的最优是差值
+            //    \                 / <- 由视差为14，15，16的相似度拟合的抛物线
+            //      .             .(16)
+            //         .14     .(15) <- int/uchar最佳视差值
+            //              .
+            //           （14.5）<- 真实的视差值
+            //   deltaR = 15.5 - 16 = -0.5
+            // 公式参考opencv sgbm源码中的亚像素插值公式
+            // 或论文<<On Building an Accurate Stereo Matching System on Graphics Hardware>> 公式7
+            // Sub-pixel match (Parabola fitting)
+            const float dist1 = vDists[L+bestincR-1];
+            const float dist2 = vDists[L+bestincR];
+            const float dist3 = vDists[L+bestincR+1];
+
+            const float deltaR = (dist1-dist3)/(2.0f*(dist1+dist3-2.0f*dist2));
+
+            // 亚像素精度的修正量应该是在[-1,1]之间，否则就是误匹配
+            if(deltaR<-1 || deltaR>1)
+                continue;
+
+            // Re-scaled coordinate
+            // 根据亚像素精度偏移量delta调整最佳匹配索引
+            float bestuR = mvScaleFactors[kpL.octave]*((float)scaleduR0+(float)bestincR+deltaR);
+
+            float disparity_fake = (uL-bestuR);
+
+//            if(disparity>=minD && disparity<maxD)
+            if(disparity_fake>=minD)
+            {
+                // 如果存在负视差，则约束为0.01
+                if(disparity_fake<=0)
+                {
+                    disparity_fake=0.01;
+                    bestuR = uL-0.01;
+                }
+                // 根据视差值计算深度信息
+                // 保存最相似点的列坐标(x)信息
+                // 保存归一化sad最小相似度
+                // Step 5. 最优视差值/深度选择.
+//                mvDepth[iL]=mbf/disparity;
+//                mvuRight[iL] = bestuR;
+                float tan20=0.36397023427;
+                float tan_alpha=(uL-960/2)/fx;
+                float tan_beta=(960/2-bestuR)/fx;
+                mvDepth[&kpL - &mvKeys[0]]=mb/((tan_alpha-tan20)/(1+tan20*tan_alpha)+(tan_beta-tan20)/(1+tan20*tan_beta));//先测试tan20，对应theta=20数据集
+                mvuRight[&kpL - &mvKeys[0]] = bestuR;
+                vDistIdx.push_back(pair<int,int>(bestDist,&kpL - &mvKeys[0]));
+            }
+        }
+    }
+
+    // Step 6. 删除离缺点(outliers)
+    // 块匹配相似度阈值判断，归一化sad最小，并不代表就一定是匹配的，比如光照变化、弱纹理、无纹理等同样会造成误匹配
+    // 误匹配判断条件  norm_sad > 1.5 * 1.4 * median
+    sort(vDistIdx.begin(),vDistIdx.end());
+    const float median = vDistIdx[vDistIdx.size()/2].first;
+    const float thDist = 1.5f*1.4f*median;//用此经验系数，排除离群值
+
+    for(int i=vDistIdx.size()-1;i>=0;i--)
+    {
+        if(vDistIdx[i].first<thDist)
+            break;
+        else
+        {
+            // 误匹配点置为-1，和初始化时保持一直，作为error code
+            mvuRight[vDistIdx[i].second]=-1;
+            mvDepth[vDistIdx[i].second]=-1;
+            cout<<"删除离缺点"<<endl;
+        }
+    }
+//    //输出匹配点数目
+//    cout<<"匹配点数目：：：：：："<<vDistIdx.size()<<endl;//0
+
+    //! 绘制匹配点
+    cv::Mat imgMatches;
+    cv::hconcat(imgLeft, imgRight, imgMatches);
+    if (!imgMatches.empty()) {
+        for (const auto &idxPair: vDistIdx) {
+            const cv::KeyPoint &kpL = mvKeys[idxPair.second];
+            const cv::KeyPoint &kpR = mvKeysRight[mvuRight[idxPair.second]];
+
+            // 左图匹配点坐标
+            cv::Point2f ptL = kpL.pt;
+            // 右图匹配点坐标（在右图的列坐标+左图宽度）
+            cv::Point2f ptR = cv::Point2f(kpR.pt.x + imgLeft.cols, kpR.pt.y);
+
+            // 绘制线段连接匹配点
+            cv::line(imgMatches, ptL, ptR, cv::Scalar(0, 255, 0), 1);
+            // 绘制匹配点
+            cv::circle(imgMatches, ptL, 2, cv::Scalar(255, 0, 0), -1);
+            cv::circle(imgMatches, ptR, 2, cv::Scalar(0, 0, 255), -1);
+        }
+
+        // 保存绘制了匹配点的图像（可选）
+        auto now = std::chrono::system_clock::now();
+        auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+        std::string matchesFilename =
+                "/home/hl/project/ORB_SLAM3_detailed_comments-master/demo/all_matches/matches_" + std::to_string(timestamp) +
+                ".png";
+        cv::imwrite(matchesFilename, imgMatches);
+    }
+
+}
+
 // 计算RGBD图像的立体深度信息
 void Frame::ComputeStereoFromRGBD(const cv::Mat &imDepth)
 {
@@ -1427,7 +1978,7 @@ void Frame::setIntegrated()
 }
 
 /** 
- * @brief 左右目模式
+ * @brief 左右目模式 // todo-jixian 2-2. 用kb模型时会进入，二者创建的帧frame不同
  */
 Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, ORBextractor* extractorLeft, ORBextractor* extractorRight, ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, GeometricCamera* pCamera2, Sophus::SE3f& Tlr,Frame* pPrevF, const IMU::Calib &ImuCalib)
         :mpcpi(NULL), mpORBvocabulary(voc),mpORBextractorLeft(extractorLeft),mpORBextractorRight(extractorRight), mTimeStamp(timeStamp), mK(K.clone()), mK_(Converter::toMatrix3f(K)),  mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
@@ -1439,23 +1990,27 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
     imgRight = imRight.clone();
 
     // Frame ID
-    mnId=nNextId++;
+    mnId=nNextId++;// Step 1 帧的ID 自增（这部分和pin时一样）
 
-    // Scale Level Info
-    mnScaleLevels = mpORBextractorLeft->GetLevels();
-    mfScaleFactor = mpORBextractorLeft->GetScaleFactor();
-    mfLogScaleFactor = log(mfScaleFactor);
-    mvScaleFactors = mpORBextractorLeft->GetScaleFactors();
-    mvInvScaleFactors = mpORBextractorLeft->GetInverseScaleFactors();
-    mvLevelSigma2 = mpORBextractorLeft->GetScaleSigmaSquares();
-    mvInvLevelSigma2 = mpORBextractorLeft->GetInverseScaleSigmaSquares();
+    // Scale Level Info // Step 2 计算图像金字塔的参数 （这部分和pin时一样）
+    mnScaleLevels = mpORBextractorLeft->GetLevels();// 获取图像金字塔的层数
+    mfScaleFactor = mpORBextractorLeft->GetScaleFactor();// 获得层与层之间的缩放比
+    mfLogScaleFactor = log(mfScaleFactor);// 计算上面缩放比的对数
+    mvScaleFactors = mpORBextractorLeft->GetScaleFactors();// 获取每层图像的缩放因子
+    mvInvScaleFactors = mpORBextractorLeft->GetInverseScaleFactors();// 同样获取每层图像缩放因子的倒数
+    mvLevelSigma2 = mpORBextractorLeft->GetScaleSigmaSquares();// 高斯模糊的时候，使用的方差
+    mvInvLevelSigma2 = mpORBextractorLeft->GetInverseScaleSigmaSquares();// 获取sigma^2的倒数
 
     // ORB extraction
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
 #endif
+//    cout<<"left right !!!!!!!!!!!!!!!!!!!!!!!"<<endl; //在这里进入：mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr)
     thread threadLeft(&Frame::ExtractORB,this,0,imLeft,static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[1]);
     thread threadRight(&Frame::ExtractORB,this,1,imRight,static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[1]);
+    /*  &Frame::ExtractORB是指向Frame类的成员函数ExtractORB的指针。这意味着ExtractORB函数将在threadLeft线程中执行
+        this是指向当前对象的指针，表示ExtractORB函数将在当前对象的上下文中执行
+        后面四个数是传给ExtractORB的参数   */
     threadLeft.join();
     threadRight.join();
 #ifdef REGISTER_TIMES
@@ -1465,34 +2020,36 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
 #endif
 
     // 左图中提取的特征点数目
-    Nleft = mvKeys.size();
+    Nleft = mvKeys.size();// mvKeys中保存的是左图像中的特征点，这里是获取左侧图像中特征点的个数
+    cout<<"左图中提取的特征点数目="<<Nleft<<endl;
     // 右图中提取的特征点数目
     Nright = mvKeysRight.size();
+    cout<<"右图中提取的特征点数目="<<Nright<<endl;
     // 特征点总数
     N = Nleft + Nright;
 
-    if(N == 0)
+    if(N == 0)// 如果两个图像中没有成功提取到特征点那么就返回，也意味这这一帧的2个图像无法使用
         return;
 
-    // This is done only for the first Frame (or after a change in the calibration)
+    // This is done only for the first Frame (or after a change in the calibration)//  Step 5 计算图像边界，将特征点分配到网格中。这个过程一般是在第一帧或者是相机标定参数发生变化之后进行
     if(mbInitialComputations)
     {
-        ComputeImageBounds(imLeft);
+        ComputeImageBounds(imLeft);// 计算图像的边界
 
-        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/(mnMaxX-mnMinX);
-        mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/(mnMaxY-mnMinY);
+        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/(mnMaxX-mnMinX);// 表示一个图像像素相当于多少个图像网格列（宽）
+        mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/(mnMaxY-mnMinY);// 表示一个图像像素相当于多少个图像网格行（高）
 
         fx = K.at<float>(0,0);
         fy = K.at<float>(1,1);
         cx = K.at<float>(0,2);
         cy = K.at<float>(1,2);
-        invfx = 1.0f/fx;
+        invfx = 1.0f/fx;// 猜测是因为这种除法计算需要的时间略长，所以这里直接存储了这个中间计算结果
         invfy = 1.0f/fy;
 
-        mbInitialComputations=false;
+        mbInitialComputations=false;// 特殊的初始化过程完成，标志复位
     }
 
-    mb = mbf / fx;
+    mb = mbf / fx;// 双目相机基线长度
 
     // Sophus/Eigen
     mTlr = Tlr;
@@ -1503,7 +2060,7 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_StartStereoMatches = std::chrono::steady_clock::now();
 #endif
-    ComputeStereoFishEyeMatches();
+    ComputeStereoFishEyeMatches();//暴力匹配，计算特征点深度
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
 
@@ -1511,16 +2068,16 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
 #endif
 
     //Put all descriptors in the same matrix
-    cv::vconcat(mDescriptors,mDescriptorsRight,mDescriptors);
+    cv::vconcat(mDescriptors,mDescriptorsRight,mDescriptors);//垂直连接（或追加）两个或多个矩阵。垂直连接意味着第二个矩阵被放置在第一个矩阵的下方
 
-    mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(nullptr));
+    mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(nullptr));// 初始化本帧的地图点
     mvbOutlier = vector<bool>(N,false);
 
-    AssignFeaturesToGrid();
+    AssignFeaturesToGrid();// Step 6 将特征点分配到图像网格中
 
     mpMutexImu = new std::mutex();
 
-    UndistortKeyPoints();
+    UndistortKeyPoints();// Step 4 用OpenCV的矫正函数、内参对提取到的特征点进行矫正
 
 }
 
@@ -1529,6 +2086,7 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
  */
 void Frame::ComputeStereoFishEyeMatches()
 {
+
     // 1. 分别取出特征点
     //Speed it up by matching keypoints in the lapping area
     vector<cv::KeyPoint> stereoLeft(mvKeys.begin() + monoLeft, mvKeys.end());
@@ -1550,7 +2108,13 @@ void Frame::ComputeStereoFishEyeMatches()
     vector<vector<cv::DMatch>> matches;
 
     // 3. 暴力匹配
+//    BFmatcher.knnMatch(stereoDescLeft,stereoDescRight,matches,2);
+    cout<<"当前帧id mnId = "<<mnId<<endl;
+//    if(mnId=0)//经测试，不是knnMatch里k=2的问题，增大k后matches数量不变，可能是特征描述子（stereoDescLeft 和 stereoDescRight）数量本身就很少
     BFmatcher.knnMatch(stereoDescLeft,stereoDescRight,matches,2);
+
+    //输出matches大小
+    cout<<"暴力匹配点数="<<matches.size()<<endl;
 
     int nMatches = 0;
     int descMatches = 0;
@@ -1559,14 +2123,16 @@ void Frame::ComputeStereoFishEyeMatches()
     for(vector<vector<cv::DMatch>>::iterator it = matches.begin(); it != matches.end(); ++it)
     {
         // 对于每一对匹配的候选中，最小距离比次小距离的0.7倍还小的认为是好的匹配
-        if((*it).size() >= 2 && (*it)[0].distance < (*it)[1].distance * 0.7)
+//        if((*it).size() >= 2 && (*it)[0].distance < (*it)[1].distance * 0.7)
+        if((*it).size() >= 2 && (*it)[0].distance < (*it)[1].distance * 0.90)    //3006 539 8 @todo diy 60度的时候改这个参数就好了，默认0.7，鱼眼大夹角用0.9
+//        if((*it).size() >= 2 )    // 3006 3006 13
         {
             //For every good match, check parallax and reprojection error to discard spurious matches
-            // 对于好的匹配，做三角化，且深度值有效的放入结果
+            // 对于好的匹配，做三角化，且深度值有效的放入结果 todo 这里三角化了
             Eigen::Vector3f p3D;
             descMatches++;
-            float sigma1 = mvLevelSigma2[mvKeys[(*it)[0].queryIdx + monoLeft].octave],
-                  sigma2 = mvLevelSigma2[mvKeysRight[(*it)[0].trainIdx + monoRight].octave];
+            float sigma1 = mvLevelSigma2[mvKeys[(*it)[0].queryIdx + monoLeft].octave],  //左侧图像中特定特征点所在的图像金字塔层级的尺度因子
+                  sigma2 = mvLevelSigma2[mvKeysRight[(*it)[0].trainIdx + monoRight].octave];    //右侧图像中特定特征点所在的图像金字塔层级的尺度因子
             // 三角化
             float depth =
                 static_cast<KannalaBrandt8*>(mpCamera)->TriangulateMatches(
@@ -1575,6 +2141,7 @@ void Frame::ComputeStereoFishEyeMatches()
                     mRlr, mtlr, sigma1, sigma2, p3D);
             // 填充数据
             if(depth > 0.0001f)
+//            if(depth > -2.5f)   // todo 如果视角超过180，共视区域深度可能为负数
             {
                 mvLeftToRightMatch[(*it)[0].queryIdx + monoLeft] = (*it)[0].trainIdx + monoRight;
                 mvRightToLeftMatch[(*it)[0].trainIdx + monoRight] = (*it)[0].queryIdx + monoLeft;
@@ -1584,6 +2151,8 @@ void Frame::ComputeStereoFishEyeMatches()
             }
         }
     }
+    cout<<"筛选后descMatches数="<<descMatches<<endl;
+    cout<<"筛选后暴力匹配得到匹配数="<<nMatches<<endl;
 }
 
 /** 

@@ -319,7 +319,7 @@ Eigen::Matrix3f KannalaBrandt8::toK_()
     return K;
 }
 
-bool KannalaBrandt8::epipolarConstrain(GeometricCamera *pCamera2, const cv::KeyPoint &kp1, const cv::KeyPoint &kp2,
+bool KannalaBrandt8::epipolarConstrain(GeometricCamera *pCamera2, const cv::KeyPoint &kp1, const cv::KeyPoint &kp2, // todo-jixian 鱼眼相机模型，通过三角化后的重投影误差判断点匹配的情况，代替极线验证
                                         const Eigen::Matrix3f &R12, const Eigen::Vector3f &t12, const float sigmaLevel, const float unc)
 {
     Eigen::Vector3f p3D;

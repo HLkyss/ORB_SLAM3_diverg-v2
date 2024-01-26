@@ -37,7 +37,7 @@ namespace ORB_SLAM3
     {
     public:
 
-        ORBmatcher(float nnratio=0.6, bool checkOri=true);
+        ORBmatcher(float nnratio=0.6, bool checkOri=true);  // 最佳/次佳越小，说明最佳更好，次佳更差，说明这个最佳点辨识度更好     @todo 调参nnradio：最优/次优描述子距离之比。
 
         // Computes the Hamming distance between two ORB descriptors
         static int DescriptorDistance(const cv::Mat &a, const cv::Mat &b);

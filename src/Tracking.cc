@@ -73,6 +73,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
 {
     // Load camera parameters from settings file
     // Step 1 从配置文件中加载相机参数
+    mTlr = settings->Tlr();// todo-jixian 0.3 diy 非kb模型在newParameterLoader()中不会读入，这里设置为读入，否则使用pin模型时Tlr为单位阵；使用kb模型时，加不加这句效果一样，都会读入Tlr数据。后面还要看pin时读入Tlr是否会造成其他影响
     if(settings){
         newParameterLoader(settings);
     }
@@ -594,7 +595,7 @@ void Tracking::newParameterLoader(Settings *settings) {
         mpCamera2 = settings->camera2();
         mpCamera2 = mpAtlas->AddCamera(mpCamera2);
 
-        mTlr = settings->Tlr();
+        mTlr = settings->Tlr();// todo-jixian 0.3 只有kb模型才读入，非kb模型最开始会做极线对齐，得到的图像相当于平行双目，因此不需要读入Tlr，Tlr默认是单位阵？
 
         mpFrameDrawer->both = true;
     }
@@ -1132,7 +1133,7 @@ bool Tracking::ParseCamParamFile(cv::FileStorage &fSettings)
                 mpCamera2 = new KannalaBrandt8(vCamCalib2);
                 mpCamera2 = mpAtlas->AddCamera(mpCamera2);
 
-                mTlr = Converter::toSophus(cvTlr);
+                mTlr = Converter::toSophus(cvTlr);// todo-jixian 0.3 kb相机模型才读入Tlr
 
                 static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[0] = rightLappingBegin;
                 static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[1] = rightLappingEnd;
@@ -1323,10 +1324,30 @@ bool Tracking::ParseORBParamFile(cv::FileStorage &fSettings)
         return false;
     }
 
-    mpORBextractorLeft = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+//    if(mState==NOT_INITIALIZED)//初始化阶段，只在共视区域提取特征点，即和最小总视野情况一样
+//    {
+//        mpORBextractorLeft = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+//
+//        if(mSensor==System::STEREO || mSensor==System::IMU_STEREO)
+//        {
+//            mpORBextractorRight = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+//            mpORBextractorLeft_init = new ORBextractor(3000*1.5*1.5,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);// todo 人为设置多的提取点用于大角度初始化
+//            mpORBextractorRight_init = new ORBextractor(3000*1.5*1.5,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+//        }
+//    }
+//    else
+//    {
+        mpORBextractorLeft = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
 
-    if(mSensor==System::STEREO || mSensor==System::IMU_STEREO)
-        mpORBextractorRight = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+        if(mSensor==System::STEREO || mSensor==System::IMU_STEREO)
+        {
+            mpORBextractorRight = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+//        mpORBextractorLeft_init = new ORBextractor(6000,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);// todo 人为设置多的提取点用于大角度初始化
+//        mpORBextractorRight_init = new ORBextractor(6000,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+            mpORBextractorLeft_init = new ORBextractor(6000,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);// todo diy 人为设置多的提取点用于大角度初始化
+            mpORBextractorRight_init = new ORBextractor(6000,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+        }
+//    }
 
     if(mSensor==System::MONOCULAR || mSensor==System::IMU_MONOCULAR)
         mpIniORBextractor = new ORBextractor(5*nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
@@ -1560,22 +1581,35 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
     }
 
     //cout << "Incoming frame creation" << endl;
-    // 双目模式，注意跟两个相机模式区分开
-    if (mSensor == System::STEREO && !mpCamera2)
-        mCurrentFrame = Frame(
-            mImGray,                // 左目图像
-            imGrayRight,            // 右目图像
-            timestamp,              // 时间戳
-            mpORBextractorLeft,     // 左目特征提取器
-            mpORBextractorRight,    // 右目特征提取器
-            mpORBVocabulary,        // 字典
-            mK,                     // 内参矩阵
-            mDistCoef,              // 去畸变参数
-            mbf,                    // 基线长度
-            mThDepth,				// 远点,近点的区分阈值
-            mpCamera);				// 相机模型
-    else if(mSensor == System::STEREO && mpCamera2)
-        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr);
+    // 双目模式，注意跟两个相机模式区分开 todo 这俩有啥区别？ 当代码使用 mpCamera2 时，它处理的是一种稍微不同的双目配置。在这种情况下，左目和右目可能有不同的相机模型。
+    if (mSensor == System::STEREO && !mpCamera2)    // todo-jixian 2-1. 用pinhole模型时会进入，二者创建的帧frame不同
+    {
+//        mCurrentFrame = Frame(
+//                mImGray,                // 左目图像
+//                imGrayRight,            // 右目图像
+//                timestamp,              // 时间戳
+//                mpORBextractorLeft,     // 左目特征提取器
+//                mpORBextractorRight,    // 右目特征提取器
+//                mpORBVocabulary,        // 字典
+//                mK,                     // 内参矩阵
+//                mDistCoef,              // 去畸变参数
+//                mbf,                    // 基线长度
+//                mThDepth,				// 远点,近点的区分阈值
+//                mpCamera);				// 相机模型
+        // diy 新的构造方式，可以传入外参
+//        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera);//用这句，就是官方的极线纠正的方法
+        mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mTlr);  //用这句，跑的就是新方法
+    }
+
+    else if(mSensor == System::STEREO && mpCamera2)    // todo-jixian 2-2. 用kb模型时会进入，二者创建的帧frame不同
+    {
+        if(mCurrentFrame.mnId<2) // @todo diy 在大角度下的前几帧，图像上提取6000个特征点用于暴力匹配，不然共视区域得到的有效点个数太少初始化失败
+            mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft_init,mpORBextractorRight_init,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr);// 左右目模式本身就会使用Tlr
+        else
+            mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr);
+//        if(mState==NOT_INITIALIZED)
+//            mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,mpCamera2,mTlr);
+    }
     else if(mSensor == System::IMU_STEREO && !mpCamera2)
         mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera,&mLastFrame,*mpImuCalib);
     else if(mSensor == System::IMU_STEREO && mpCamera2)
@@ -2049,7 +2083,7 @@ void Tracking::Track()
 
     if(mState==NO_IMAGES_YET)
     {
-        mState = NOT_INITIALIZED;
+        mState = NOT_INITIALIZED;//这里mState从0变成1
     }
 
     mLastProcessedState=mState;
@@ -2108,6 +2142,7 @@ void Tracking::Track()
         if(mState!=OK) // If rightly initialized, mState=OK
         {
             // 如果没有成功初始化，直接返回
+            cout<<"mState!=OK，没有成功初始化，直接返回"<<endl;
             mLastFrame = Frame(mCurrentFrame);
             return;
         }
@@ -2391,7 +2426,7 @@ void Tracking::Track()
                 bOK = TrackLocalMap();
             }
             if(!bOK)
-                cout << "Fail to track local map!" << endl;
+                cout << "Fail to track local map!" << endl; // todo 最经常报的错就是这个
         }
         else
         {
@@ -2674,12 +2709,16 @@ void Tracking::Track()
  * @brief 双目和rgbd的地图初始化，比单目简单很多
  *
  * 由于具有深度信息，直接生成MapPoints
+ *
+ * https://blog.csdn.net/m0_38091774/article/details/130187518#:~:text=%E5%8F%8C%E7%9B%AE%E5%88%9D%E5%A7%8B%E5%8C%96%E9%9C%80%E8%A6%81%E6%BB%A1%E8%B6%B3%E5%BD%93%E5%89%8D%E5%B8%A7%E7%89%B9%E5%BE%81%E7%82%B9%E7%9A%84%E6%95%B0%E9%87%8F%E5%A4%A7%E4%BA%8E500%2C%E6%89%8D%E8%AE%A4%E4%B8%BA%E5%85%B7%E5%A4%87%E5%8F%8C%E7%9B%AE%E5%88%9D%E5%A7%8B%E5%8C%96%E7%9A%84%E5%89%8D%E6%8F%90%E6%9D%A1%E4%BB%B6%E3%80%82%20%281%29,%E7%BA%AF%E5%8F%8C%E7%9B%AE%E6%A8%A1%E5%BC%8F%E6%97%B6%20%EF%BC%9A%E8%BF%99%E9%87%8C%E7%9A%84%E7%89%B9%E5%BE%81%E7%82%B9%E6%95%B0%E9%87%8F%E5%9C%A8%E5%8F%8C%E7%9B%AE%E6%A8%A1%E5%BC%8F%E6%8C%87%E5%B7%A6%E7%9B%AE%E5%9B%BE%E5%83%8F%E7%9A%84%E7%89%B9%E5%BE%81%E7%82%B9%E6%95%B0%E9%87%8F%EF%BC%8C%E5%9C%A8%E5%8F%8C%E9%B1%BC%E7%9C%BC%E7%BB%84%E5%90%88%E5%8F%8C%E7%9B%AE%E6%A8%A1%E5%BC%8F%E4%B8%8B%E6%98%AF%E6%8C%87%E5%B7%A6%E7%9B%AE%2B%E5%8F%B3%E7%9B%AE%E7%89%B9%E5%BE%81%E7%82%B9%E7%9A%84%E6%95%B0%E9%87%8F%E3%80%82
  */
-void Tracking::StereoInitialization()
+void Tracking::StereoInitialization()   // @TODO 双目初始化  question
 {
-    // 初始化要求当前帧的特征点超过500
-    if(mCurrentFrame.N>500)
+    // 初始化要求当前帧的特征点超过500 一般都能满足
+    cout<<"mCurrentFrame.N ==================="<<mCurrentFrame.N<<endl;
+    if(mCurrentFrame.N>500)//这里的特征点数量在双目模式指左目图像的特征点数量，在双鱼眼组合双目模式下是指左目+右目特征点的数量
     {
+        cout<<"特征点数量（在双目模式指左目图像的特征点数量，双鱼眼组合双目模式下是指左目+右目特征点的数量）="<<mCurrentFrame.N<<endl;
         if (mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
         {
             if (!mCurrentFrame.mpImuPreintegrated || !mLastFrame.mpImuPreintegrated)
@@ -2749,23 +2788,27 @@ void Tracking::StereoInitialization()
                 }
             }
         } else{
-            for(int i = 0; i < mCurrentFrame.Nleft; i++){
-                int rightIndex = mCurrentFrame.mvLeftToRightMatch[i];
-                if(rightIndex != -1){
-                    Eigen::Vector3f x3D = mCurrentFrame.mvStereo3Dpoints[i];
+            for(int i = 0; i < mCurrentFrame.Nleft; i++){   //遍历当前帧的左相机特征点
+                int rightIndex = mCurrentFrame.mvLeftToRightMatch[i];   //获取与左相机特征点匹配的右相机特征点索引
+                if(rightIndex != -1){   //检查是否存在匹配
+                    Eigen::Vector3f x3D = mCurrentFrame.mvStereo3Dpoints[i];    //获取三维点坐标:使用左相机特征点和右相机特征点的匹配信息来计算三维世界坐标点
 
-                    MapPoint* pNewMP = new MapPoint(x3D, pKFini, mpAtlas->GetCurrentMap());
+                    MapPoint* pNewMP = new MapPoint(x3D, pKFini, mpAtlas->GetCurrentMap()); //创建一个新的地图点:使用左相机特征点和右相机特征点的匹配信息来计算三维世界坐标点
 
+                    //为新地图点添加观测:将新创建的地图点与左右相机的特征点关联起来，标记为已观测到此地图点
                     pNewMP->AddObservation(pKFini,i);
                     pNewMP->AddObservation(pKFini,rightIndex + mCurrentFrame.Nleft);
 
+                    //为初始关键帧添加地图点:在初始关键帧中记录这个新地图点
                     pKFini->AddMapPoint(pNewMP,i);
                     pKFini->AddMapPoint(pNewMP,rightIndex + mCurrentFrame.Nleft);
 
+                    //计算地图点的独特描述符和更新深度和法线信息:计算地图点的描述符，并更新其深度和法线信息，用于后续的地图点匹配和地图维护
                     pNewMP->ComputeDistinctiveDescriptors();
                     pNewMP->UpdateNormalAndDepth();
-                    mpAtlas->AddMapPoint(pNewMP);
+                    mpAtlas->AddMapPoint(pNewMP);//将地图点添加到当前地图中
 
+                    //更新当前帧的地图点信息
                     mCurrentFrame.mvpMapPoints[i]=pNewMP;
                     mCurrentFrame.mvpMapPoints[rightIndex + mCurrentFrame.Nleft]=pNewMP;
                 }
@@ -2797,7 +2840,7 @@ void Tracking::StereoInitialization()
         mpMapDrawer->SetCurrentCameraPose(mCurrentFrame.GetPose());
 
         // 追踪成功
-        mState=OK;
+        mState=OK;//这里mState从1变成2(从NOT_INITIALIZED变成OK)，不再初始化
     }
 }
 
@@ -3179,11 +3222,12 @@ bool Tracking::TrackReferenceKeyFrame()
     ORBmatcher matcher(0.7,true);
     vector<MapPoint*> vpMapPointMatches;
 
-    // Step 2：通过词袋BoW加速当前帧与参考帧之间的特征点匹配
+    // Step 2：通过词袋BoW加速当前帧与参考帧之间的特征点匹配 @todo 好像是这里的问题，导致匹配点数目不够
     int nmatches = matcher.SearchByBoW(mpReferenceKF,mCurrentFrame,vpMapPointMatches);
 
     // 匹配数目小于15，认为跟踪失败
-    if(nmatches<15)
+    //cout<<"通过BoW得到的匹配数目为"<<nmatches<<endl;
+    if(nmatches<10) // @TODO diy 最小匹配点数目 原15
     {
         cout << "TRACK_REF_KF: Less than 15 matches!!\n";
         return false;
@@ -3232,11 +3276,12 @@ bool Tracking::TrackReferenceKeyFrame()
                 nmatchesMap++;
         }
     }
+    cout<<"在优化之后才剔除外点，得到匹配的内点数量="<<nmatchesMap<<endl;
 
     if (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
         return true;
     else
-        return nmatchesMap>=10;  // 跟踪成功的数目超过10才认为跟踪成功，否则跟踪失败
+        return nmatchesMap>=5;  // 跟踪成功的数目超过10才认为跟踪成功，否则跟踪失败
 }
 
 /**
@@ -3453,7 +3498,7 @@ bool Tracking::TrackWithMotionModel()
     if (mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
         return true;
     else
-        return nmatchesMap>=10;  // 匹配超过10个点就认为跟踪成功
+        return nmatchesMap>=5;  // 匹配超过10个点就认为跟踪成功
 }
 
 /**
@@ -3481,11 +3526,11 @@ bool Tracking::TrackLocalMap()
     // Step 1：更新局部关键帧 mvpLocalKeyFrames 和局部地图点 mvpLocalMapPoints
     UpdateLocalMap();
     // Step 2：筛选局部地图中新增的在视野范围内的地图点，投影到当前帧搜索匹配，得到更多的匹配关系
-    SearchLocalPoints();
+    SearchLocalPoints();// todo 这个没细看，也很重要，local map会不会跟丢可能就由这个决定
 
-    // TOO check outliers before PO
+    // TOO check outliers before PO （Pose Optimization，位姿优化）
     // 查看内外点数目，调试用
-    int aux1 = 0, aux2=0;
+    int aux1 = 0, aux2=0;   //aux1:当前帧中地图点的总数，aux2:被标记为外点的地图点数量。 内点是指那些与当前模型预测一致的数据点。内点和外点的分类通常基于一定的准则或阈值，例如重投影误差、几何一致性等
     for(int i=0; i<mCurrentFrame.N; i++)
         if( mCurrentFrame.mvpMapPoints[i])
         {
@@ -3493,6 +3538,8 @@ bool Tracking::TrackLocalMap()
             if(mCurrentFrame.mvbOutlier[i])
                 aux2++;
         }
+
+    cout<<"内点数="<<aux1-aux2<<"，外点数="<<aux2<<endl;
 
     // 在这个函数之前，在 Relocalization、TrackReferenceKeyFrame、TrackWithMotionModel 中都有位姿优化
     // Step 3：前面新增了更多的匹配关系，BA优化得到更准确的位姿
@@ -3573,8 +3620,9 @@ bool Tracking::TrackLocalMap()
     // More restrictive if there was a relocalization recently
     mpLocalMapper->mnMatchesInliers=mnMatchesInliers;
     // Step 5：根据跟踪匹配数目及重定位情况决定是否跟踪成功
+    cout<<"跟踪匹配数目="<<mnMatchesInliers<<endl;
     // 如果最近刚刚发生了重定位,那么至少成功匹配50个点才认为是成功跟踪
-    if(mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames && mnMatchesInliers<50)
+    if(mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames && mnMatchesInliers<40) // 默认50 todo diy 调试发现，这里只有48   降低了跟踪的阈值
         return false;
 
     // RECENTLY_LOST状态下，至少成功跟踪10个才算成功
@@ -3602,7 +3650,7 @@ bool Tracking::TrackLocalMap()
     }
     else
     {
-        //以上情况都不满足，只要跟踪的地图点大于30个就认为成功了
+        //以上情况都不满足，只要跟踪的地图点大于30个就认为成功了 todo 修改这个试试
         if(mnMatchesInliers<30)
             return false;
         else
@@ -3636,7 +3684,7 @@ bool Tracking::NeedNewKeyFrame()
             return false;
     }
 
-    // Step 1：纯VO模式下不插入关键帧
+    // Step 1：纯VO模式下不插入关键帧(仅定位模式)
     if(mbOnlyTracking)
         return false;
 
@@ -3647,6 +3695,7 @@ bool Tracking::NeedNewKeyFrame()
         {
             std::cout << "NeedNewKeyFrame: localmap stopped" << std::endl;
         }*/
+        cout<<"局部地图线程被闭环检测使用，不插入关键帧"<<endl;
         return false;
     }
 
@@ -3658,8 +3707,10 @@ bool Tracking::NeedNewKeyFrame()
     // mnLastRelocFrameId是最近一次重定位帧的ID
     // mMaxFrames等于图像输入的帧率
     //  Step 3：如果距离上一次重定位比较近，并且关键帧数目超出最大限制，不插入关键帧
-    if(mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames && nKFs>mMaxFrames)
+    if(mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames && nKFs>mMaxFrames) //@ todo diy 修改时间，让关键帧更频繁
+//    if(mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames*0.05 && nKFs>mMaxFrames)
     {
+        cout<<"距离上一次重定位比较近，并且关键帧数目超出最大限制，不插入关键帧"<<endl;
         return false;
     }
 
@@ -3676,7 +3727,7 @@ bool Tracking::NeedNewKeyFrame()
 
     // Local Mapping accept keyframes?
     // Step 5：查询局部地图线程是否繁忙，当前能否接受新的关键帧
-    bool bLocalMappingIdle = mpLocalMapper->AcceptKeyFrames();
+    bool bLocalMappingIdle = mpLocalMapper->AcceptKeyFrames();// 在这附近，可视化界面图像播放下一帧
 
     // Check how many "close" points are being tracked and how many could be potentially created.
     // Step 6：对于双目或RGBD摄像头，统计成功跟踪的近点的数量，如果跟踪到的近点太少，没有跟踪到的近点较多，可以插入关键帧
@@ -3685,10 +3736,11 @@ bool Tracking::NeedNewKeyFrame()
 
     if(mSensor!=System::MONOCULAR && mSensor!=System::IMU_MONOCULAR)
     {
-        int N = (mCurrentFrame.Nleft == -1) ? mCurrentFrame.N : mCurrentFrame.Nleft;
+        int N = (mCurrentFrame.Nleft == -1) ? mCurrentFrame.N : mCurrentFrame.Nleft;    //在这附近，可视化界面图像播放下一帧
         for(int i =0; i<N; i++)
         {
             // 深度值在有效范围内
+            //cout<<"mCurrentFrame.mvDepth[i]:"<<mCurrentFrame.mvDepth[i]<<endl;
             if(mCurrentFrame.mvDepth[i]>0 && mCurrentFrame.mvDepth[i]<mThDepth)
             {
                 if(mCurrentFrame.mvpMapPoints[i] && !mCurrentFrame.mvbOutlier[i])
@@ -3707,7 +3759,8 @@ bool Tracking::NeedNewKeyFrame()
 
     // Step 7：决策是否需要插入关键帧
     // Thresholds
-    // Step 7.1：设定比例阈值，当前帧和参考关键帧跟踪到点的比例，比例越大，越倾向于增加关键帧
+    // Step 7.1：设定比例阈值，当前帧和参考关键帧跟踪到点的比例，比例越大，越倾向于增加关键帧 todo
+//    float thRefRatio = 0.75f;
     float thRefRatio = 0.75f;
     // 关键帧只有一帧，那么插入关键帧的阈值设置的低一点，插入频率较低
     if(nKFs<2)
@@ -3736,18 +3789,32 @@ bool Tracking::NeedNewKeyFrame()
             thRefRatio = 0.90f;
     }
 
+//    cout<<"阶段一："<<endl;
     // Condition 1a: More than "MaxFrames" have passed from last keyframe insertion
     // Step 7.2：很长时间没有插入关键帧，可以插入
     const bool c1a = mCurrentFrame.mnId>=mnLastKeyFrameId+mMaxFrames;
+//    const bool c1a = mCurrentFrame.mnId>=mnLastKeyFrameId+mMaxFrames*0.05;
+//    if(c1a){cout<<"c1a:很长时间没有插入关键帧，"<<endl;}
     // Condition 1b: More than "MinFrames" have passed and Local Mapping is idle
     // Step 7.3：满足插入关键帧的最小间隔并且localMapper处于空闲状态，可以插入
     const bool c1b = ((mCurrentFrame.mnId>=mnLastKeyFrameId+mMinFrames) && bLocalMappingIdle); //mpLocalMapper->KeyframesInQueue() < 2);
+//    const bool c1b = ((mCurrentFrame.mnId>=mnLastKeyFrameId+mMinFrames*0.05) && bLocalMappingIdle); //mpLocalMapper->KeyframesInQueue() < 2);
+//    if(c1b){cout<<"c1b:满足插入关键帧的最小间隔并且localMapper处于空闲状态，"<<endl;}
     //Condition 1c: tracking is weak
     // Step 7.4：在双目，RGB-D的情况下当前帧跟踪到的点比参考关键帧的0.25倍还少，或者满足bNeedToInsertClose
     const bool c1c = mSensor!=System::MONOCULAR && mSensor!=System::IMU_MONOCULAR && mSensor!=System::IMU_STEREO && mSensor!=System::IMU_RGBD && (mnMatchesInliers<nRefMatches*0.25 || bNeedToInsertClose) ;
+//    if(c1c){cout<<"c1c:当前帧跟踪到的点比参考关键帧的0.25倍还少，或者跟踪到的近点太少且没跟踪到的近点较多，"<<endl;}
     // Condition 2: Few tracked points compared to reference keyframe. Lots of visual odometry compared to map matches.
     // Step 7.5：和参考帧相比当前跟踪到的点太少 或者满足bNeedToInsertClose；同时跟踪到的内点还不能太少
-    const bool c2 = (((mnMatchesInliers<nRefMatches*thRefRatio || bNeedToInsertClose)) && mnMatchesInliers>15);
+//    const bool c2 = (((mnMatchesInliers<nRefMatches*thRefRatio || bNeedToInsertClose)) && mnMatchesInliers>15); // todo 原来15
+    const bool c2 = (((mnMatchesInliers<nRefMatches*thRefRatio || bNeedToInsertClose)) && mnMatchesInliers>10); // todo diy 原来15
+//    if(c2){cout<<"c2:和参考帧相比当前跟踪到的点太少，或者跟踪到的近点太少且没跟踪到的近点较多；同时跟踪到的内点多于15，"<<endl;}
+    // todo diy c2经常不成立，新加一个条件，判断当前点总数
+//    const bool c_new = (mnMatchesInliers<250*1.5*1.5);
+    const bool c_new = (mnMatchesInliers<350);//250
+//    if(c_new){cout<<"c_new:点少，有"<<mnMatchesInliers<<"个点"<<endl;}
+
+//        cout<<"跟踪到的内点有"<<mnMatchesInliers<<"个点"<<endl;
 
     //std::cout << "NeedNewKF: c1a=" << c1a << "; c1b=" << c1b << "; c1c=" << c1c << "; c2=" << c2 << std::endl;
     // Temporal condition for Inertial cases
@@ -3775,14 +3842,17 @@ bool Tracking::NeedNewKeyFrame()
         c4=false;
 
     // 相比ORB-SLAM2多了c3,c4
-    if(((c1a||c1b||c1c) && c2)||c3 ||c4)
+//    if(((c1a||c1b||c1c) && c2)||c3 ||c4)
+    if(((c1a||c1b||c1c) && (c2||c_new))||c3 ||c4)
     {
         // If the mapping accepts keyframes, insert keyframe.
         // Otherwise send a signal to interrupt BA
         // Step 7.6：local mapping空闲时或者正在做imu初始化时可以直接插入，不空闲的时候要根据情况插入
+//        cout<<"满足(c1a||c1b||c1c) && c2)，进入阶段二：";
         if(bLocalMappingIdle || mpLocalMapper->IsInitializing())
         {
             // 可以插入关键帧
+//            cout<<"local mapping空闲：可以直接插入！！！"<<endl;
             return true;
         }
         else
@@ -3794,11 +3864,17 @@ bool Tracking::NeedNewKeyFrame()
                 // tracking插入关键帧不是直接插入，而且先插入到mlNewKeyFrames中，
                 // 然后localmapper再逐个pop出来插入到mspKeyFrames
                 if(mpLocalMapper->KeyframesInQueue()<3)
+                {
                     // 队列中的关键帧数目不是很多,可以插入
+//                    cout<<"local mapping不空闲。局部建图线程中待处理关键帧少于3，可以插入关键帧！！！"<<endl;
                     return true;
+                }
                 else
+                {
                     // 队列中缓冲的关键帧数目太多,暂时不能插入
+//                    cout<<"但队列中缓冲的关键帧数目太多,暂时不能插入！！！"<<endl;
                     return false;
+                }
             }
             else
             {
@@ -3827,10 +3903,16 @@ void Tracking::CreateNewKeyFrame()
 {
     // 如果局部建图线程正在初始化且没做完或关闭了,就无法插入关键帧
     if(mpLocalMapper->IsInitializing() && !mpAtlas->isImuInitialized())
+    {
+//        cout<<"局部建图线程正在初始化且没做完或关闭了,无法插入关键帧"<<endl;
         return;
+    }
 
     if(!mpLocalMapper->SetNotStop(true))
+    {
+//        cout<<"局部建图线程正在初始化且没做完或关闭了,无法插入关键帧"<<endl;
         return;
+    }
 
     // Step 1：将当前帧构造成关键帧
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpAtlas->GetCurrentMap(),mpKeyFrameDB);

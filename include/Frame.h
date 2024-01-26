@@ -67,6 +67,9 @@ public:
     // Constructor for Monocular cameras.
     Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, GeometricCamera* pCamera, cv::Mat &distCoef, const float &bf, const float &thDepth, Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
 
+    //diy 修改 Frame 类的构造函数，使其可以接收一个 Settings 类的实例或指针，并从中获取 Tlr 的值
+    Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeStamp, ORBextractor* extractorLeft, ORBextractor* extractorRight, ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera, Sophus::SE3f Tlr, Frame* pPrevF = static_cast<Frame*>(NULL), const IMU::Calib &ImuCalib = IMU::Calib());
+
     // Destructor
     // ~Frame();
 
@@ -114,6 +117,7 @@ public:
     // Search a match for each keypoint in the left image to a keypoint in the right image.
     // If there is a match, depth is computed and the right coordinate associated to the left keypoint is stored.
     void ComputeStereoMatches();
+    void ComputeStereoMatches2();// diy
 
     // Associate a "right" coordinate to a keypoint if there is valid depth in the depthmap.
     void ComputeStereoFromRGBD(const cv::Mat &imDepth);
@@ -161,8 +165,6 @@ public:
     inline bool HasVelocity() const {
         return mbHasVelocity;
     }
-
-
 
 private:
     //Sophus/Eigen migration
@@ -231,7 +233,7 @@ public:
     // Corresponding stereo coordinate and depth for each keypoint.
     std::vector<MapPoint*> mvpMapPoints;
     // "Monocular" keypoints have a negative value.
-    std::vector<float> mvuRight;
+    std::vector<float> mvuRight;//存储了每个左图特征点对应的右图匹配点的水平像素坐标
     std::vector<float> mvDepth;
 
     // Bag of Words Vector structures.
@@ -321,6 +323,8 @@ private:
     bool mbImuPreintegrated;
 
     std::mutex *mpMutexImu;
+
+    Sophus::SE3f Tlr_; // diy Tlr 成员变量
 
 public:
     GeometricCamera* mpCamera, *mpCamera2;
