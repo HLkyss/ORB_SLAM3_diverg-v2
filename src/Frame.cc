@@ -1624,23 +1624,30 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
 ////////////////////////////////////////////////////////////////////////////////// 截止到这里没问题
 
         // 获取尺度相关的偏移量r
-        float r = 2.0f * mvScaleFactors[kpL.octave];
+        const float r = 2.0f * mvScaleFactors[kpL.octave];
 
         const int &levelL = kpL.octave;
         const float &vL = kpL.pt.y;
         const float &uL = kpL.pt.x;
 
-//        const float minU = uL-maxD;// 计算理论上的最佳搜索范围
-        const float minU = 0;// 先不算了，直接给0
-        const float maxU = uL-minD;
+//        const float minU = uL-maxD;// 平行情况理论上的最佳搜索范围
+        float tan20=0.36397023427;
+        float tan65=2.144507;
+//        const float minU = imgLeft.cols/2-fx*tan65;// 放大求解，得到的是负数，没用。具体看笔记公式
+        float tantan=(tan20-(uL-960/2)/fx)/(1+tan20*(uL-960/2)/fx);
+        const float minU = imgLeft.cols/2-fx*(1-tantan+tan20)/(1-(1-tantan)*tan20);// 看笔记公式
+//        const float maxU = uL-0;//直接用平行情况的解，感觉差的也不会很多
+        const float maxU = imgLeft.cols/2-fx*(tantan+tan20)/(1-tantan*tan20);//直接用平行情况的解，感觉差的也不会很多
         if(maxU<0)// 最大搜索范围小于0，说明无匹配点
             continue;
+        cout<<"minU = "<<minU<<endl;
+        cout<<"maxU = "<<maxU<<endl;
 
         int bestDist = ORBmatcher::TH_HIGH;// 初始化最佳相似度，用最大相似度，以及最佳匹配点索引
         size_t bestIdxR = 0;
 
         int iL=&kpL - &mvKeys[0];// 计算了当前特征点 kpL 在 mvKeys 中的索引，以便获取对应的描述子
-        const cv::Mat &dL = mDescriptors.row(iL);
+        const cv::Mat &dL = mDescriptors.row(iL);//还能用“row”吗？应该没问题，就是取每个特征点的描述子，只不过每个特征点描述子存在一行，这里是取了一行，即一个特征点的描述子
 
         // 2. 粗匹配 在右图的极线上进行匹配点搜索
         for (const auto& kpR : mvKeysRight) {
@@ -1659,6 +1666,8 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
 
                 // 如果距离小于某个阈值，则视为潜在匹配
                 if (distance < r) { // 在极线上下平移r的范围内搜索右目特征点
+                    //cout<<"r = "<<r<<", distance = "<<distance<<endl;
+
                     // 执行粗匹配和精匹配逻辑
                     // 粗匹配逻辑：大致过程为：遍历极线上下平移r的范围内的右目特征点，最小的描述子距离对应的点就是得到的匹配点
 
@@ -1674,10 +1683,9 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
                 }
             }
         }
-        cout<<"bestIdxR = "<<bestIdxR<<endl;
-        cout<<"bestDist = "<<bestDist<<endl;
+        cout<<"left index ="<<iL<<", bestIdxR = "<<bestIdxR<<", bestDist = "<<bestDist<<endl;
 
-        if(mvScaleFactors[kpL.octave] ==1 && mvScaleFactors[mvKeysRight[bestIdxR].octave]==1)//先排除尺度问题
+        if(mvScaleFactors[kpL.octave] ==1 && mvScaleFactors[mvKeysRight[bestIdxR].octave]==1 && bestIdxR!=0)//由于不确定尺度的具体实现方法对不对，先排除尺度问题；根据输出发现很多bestIdxR=0，即给的初始值，这种情况感觉说明极线上没有匹配点，将其排除。在这样的限制下发现得到的结果基本都是正确的。结果保存在/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches1
         {
             cv::Mat imgMatches1;
             cv::hconcat(imgLeft, imgRight, imgMatches1);
@@ -1698,7 +1706,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
             auto now1 = std::chrono::system_clock::now();
             auto timestamp1 = std::chrono::duration_cast<std::chrono::seconds>(now1.time_since_epoch()).count();
             std::string matchesFilename1 =
-                    "/home/hl/project/ORB_SLAM3_detailed_comments-master/demo/raw_matches/matches_" + std::to_string(timestamp1) +
+                    "/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches/matches_" + std::to_string(timestamp1) +
                     ".png";
             cv::imwrite(matchesFilename1, imgMatches1); //有问题，怀疑是得到的对应的匹配点坐标可能位于不同的金字塔层级上
         }
@@ -1845,7 +1853,6 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
                 // Step 5. 最优视差值/深度选择.
 //                mvDepth[iL]=mbf/disparity;
 //                mvuRight[iL] = bestuR;
-                float tan20=0.36397023427;
                 float tan_alpha=(uL-960/2)/fx;
                 float tan_beta=(960/2-bestuR)/fx;
                 mvDepth[&kpL - &mvKeys[0]]=mb/((tan_alpha-tan20)/(1+tan20*tan_alpha)+(tan_beta-tan20)/(1+tan20*tan_beta));//先测试tan20，对应theta=20数据集
