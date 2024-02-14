@@ -1858,39 +1858,39 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
             float bestuR = mvScaleFactors[kpL.octave]*((float)scaleduR0+(float)bestincR+deltaRu);//为什么是kpL？
             // 极线方程：Ax + By + C = 0
             float bestvR = (-C-A*bestuR)/B;//将横坐标带入极线方程求得
-            float bestvR2 = mvScaleFactors[kpL.octave]*((float)scaledvR0+(float)bestincR+deltaRv);
-            cout<<"bestvR = "<<bestvR<<", bestvR2 = "<<bestvR2<<endl;//二者有时候差零点几，有时候差一点几，不知道用谁是对的
+//            float bestvR2 = mvScaleFactors[kpL.octave]*((float)scaledvR0+(float)bestincR+deltaRv);//bestincR是横坐标的增量，这里应该用纵坐标的增量。这里没有求解纵坐标增量，而是选择直接带入横坐标到极线方程求纵坐标
+//            cout<<"bestvR = "<<bestvR<<", bestvR2 = "<<bestvR2<<endl;
 
-            cv::Mat imgMatches1;
-            cv::hconcat(imgLeft, imgRight, imgMatches1);
-//            cv::Point2f left_point = kpL.pt * mvScaleFactors[kpL.octave];//这两句考虑尺度系数，乘上或除以尺度系数，得到的结果感觉都有问题（原理上考虑应该是乘尺度系数）
-//            cv::Point2f right_point = cv::Point2f(mvKeysRight[bestIdxR].pt.x * mvScaleFactors[mvKeysRight[bestIdxR].octave],mvKeysRight[bestIdxR].pt.y * mvScaleFactors[mvKeysRight[bestIdxR].octave]);
-            cv::Point2f left_point = kpL.pt;//用这两句不乘/除尺度因子的代码，得到的结果有不少正确的，但也有一些错误的，感觉是正确的粗匹配结果了，结果保存在/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches2
-            //由bestvR和bestuR得到点的坐标
-            cv::Point2f right_point = cv::Point2f(bestuR, bestvR);
-//            cv::Point2f right_point = cv::Point2f(mvKeysRight[bestIdxR+bestincR].pt.x, mvKeysRight[bestIdxR+bestincR].pt.y);
-            // 绘制匹配连线
-            cv::line(imgMatches1, left_point, cv::Point2f(right_point.x + imgLeft.cols, right_point.y), cv::Scalar(0, 255, 0), 1);
-            cv::circle(imgMatches1, left_point, 2, cv::Scalar(255, 0, 0), -1);
-            cv::circle(imgMatches1, cv::Point2f(right_point.x + imgLeft.cols, right_point.y), 2, cv::Scalar(0, 0, 255), -1);
-            // 在图像上添加文字
-            std::string text = "Left Scale: " + std::to_string(mvScaleFactors[kpL.octave]) +
-                               ", Right Scale: " + std::to_string(mvScaleFactors[mvKeysRight[bestIdxR+bestincR].octave]);
-            int fontFace = cv::FONT_HERSHEY_SIMPLEX;
-            double fontScale = 0.5;
-            int thickness = 1;
-            cv::Point textOrg(10, 30);  // 您可以调整这个位置，以便文字在图像上的合适位置显示
-            cv::Scalar textColor(255, 255, 255); // 白色文字
-            cv::putText(imgMatches1, text, textOrg, fontFace, fontScale, textColor, thickness);
-            auto now1 = std::chrono::system_clock::now();
-            auto timestamp1 = std::chrono::duration_cast<std::chrono::seconds>(now1.time_since_epoch()).count();
-            std::string matchesFilename1 =
-                    "/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches4/matches_" + std::to_string(timestamp1) +
-                    ".png";
+//            cv::Mat imgMatches1;
+//            cv::hconcat(imgLeft, imgRight, imgMatches1);
+// //            cv::Point2f left_point = kpL.pt * mvScaleFactors[kpL.octave];//这两句考虑尺度系数，乘上或除以尺度系数，得到的结果感觉都有问题（原理上考虑应该是乘尺度系数）
+// //            cv::Point2f right_point = cv::Point2f(mvKeysRight[bestIdxR].pt.x * mvScaleFactors[mvKeysRight[bestIdxR].octave],mvKeysRight[bestIdxR].pt.y * mvScaleFactors[mvKeysRight[bestIdxR].octave]);
+//            cv::Point2f left_point = kpL.pt;//用这两句不乘/除尺度因子的代码，得到的结果有不少正确的，但也有一些错误的，感觉是正确的粗匹配结果了，结果保存在/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches2
+//            //由bestvR和bestuR得到点的坐标
+//            cv::Point2f right_point = cv::Point2f(bestuR, bestvR);
+// //            cv::Point2f right_point = cv::Point2f(mvKeysRight[bestIdxR+bestincR].pt.x, mvKeysRight[bestIdxR+bestincR].pt.y);
+//            // 绘制匹配连线
+//            cv::line(imgMatches1, left_point, cv::Point2f(right_point.x + imgLeft.cols, right_point.y), cv::Scalar(0, 255, 0), 1);
+//            cv::circle(imgMatches1, left_point, 2, cv::Scalar(255, 0, 0), -1);
+//            cv::circle(imgMatches1, cv::Point2f(right_point.x + imgLeft.cols, right_point.y), 2, cv::Scalar(0, 0, 255), -1);
+//            // 在图像上添加文字
+//            std::string text = "Left Scale: " + std::to_string(mvScaleFactors[kpL.octave]) +
+//                               ", Right Scale: " + std::to_string(mvScaleFactors[mvKeysRight[bestIdxR+bestincR].octave]);
+//            int fontFace = cv::FONT_HERSHEY_SIMPLEX;
+//            double fontScale = 0.5;
+//            int thickness = 1;
+//            cv::Point textOrg(10, 30);  // 您可以调整这个位置，以便文字在图像上的合适位置显示
+//            cv::Scalar textColor(255, 255, 255); // 白色文字
+//            cv::putText(imgMatches1, text, textOrg, fontFace, fontScale, textColor, thickness);
+//            auto now1 = std::chrono::system_clock::now();
+//            auto timestamp1 = std::chrono::duration_cast<std::chrono::seconds>(now1.time_since_epoch()).count();
+//            std::string matchesFilename1 =
+//                    "/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches4/matches_" + std::to_string(timestamp1) +
+//                    ".png";
 //            cv::imwrite(matchesFilename1, imgMatches1); //结果保存在/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches2  看结果，基本上没问题
 //            cv::waitKey(1000);//一定要这样，不然一张图没存完就搞下一张图去了，每张图就能得到几个特征点
 
-//////////////////////////////////////////////////////// 我草到这里，看结果，得到的全是正确的匹配点
+//////////////////////////////////////////////////////// 到这里，看结果，得到的基本全是正确的匹配点
 
             float disparity_fake = (uL-bestuR);
 
@@ -1966,7 +1966,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
         std::string matchesFilename =
                 "/home/hl/project/ORB_SLAM3_detailed_comments-master/demo/all_matches/matches_" + std::to_string(timestamp) +
                 ".png";
-        cv::imwrite(matchesFilename, imgMatches);
+//        cv::imwrite(matchesFilename, imgMatches);
     }
 
 }
