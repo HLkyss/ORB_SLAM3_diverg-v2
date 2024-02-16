@@ -124,6 +124,7 @@ class KeyFrame
         serializeVectorKeyPoints<Archive>(ar, mvKeys, version);
         serializeVectorKeyPoints<Archive>(ar, mvKeysUn, version);
         ar & const_cast<vector<float>& >(mvuRight);
+        ar & const_cast<vector<float>& >(mvvRight);//add 这是什么意思
         ar & const_cast<vector<float>& >(mvDepth);
         serializeMatrix<Archive>(ar,mDescriptors,version);
         // BOW
@@ -381,6 +382,7 @@ public:
     const std::vector<cv::KeyPoint> mvKeys;
     const std::vector<cv::KeyPoint> mvKeysUn;
     const std::vector<float> mvuRight; // negative value for monocular points
+    const std::vector<float> mvvRight; // add
     const std::vector<float> mvDepth; // negative value for monocular points
     const cv::Mat mDescriptors;
 

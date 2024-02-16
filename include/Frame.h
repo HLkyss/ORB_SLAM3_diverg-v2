@@ -234,6 +234,7 @@ public:
     std::vector<MapPoint*> mvpMapPoints;
     // "Monocular" keypoints have a negative value.
     std::vector<float> mvuRight;//存储了每个左图特征点对应的右图匹配点的水平像素坐标
+    std::vector<float> mvvRight;//add 存储纵坐标
     std::vector<float> mvDepth;
 
     // Bag of Words Vector structures.

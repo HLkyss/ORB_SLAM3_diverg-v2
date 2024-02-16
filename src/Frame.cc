@@ -535,6 +535,7 @@ Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extra
     // Set no stereo information
     // 由于单目相机无法直接获得立体信息，所以这里要给右图像对应点和深度赋值-1表示没有相关信息
     mvuRight = vector<float>(N,-1);
+    mvvRight = vector<float>(N,-1);//add
     mvDepth = vector<float>(N,-1);
     mnCloseMPs = 0;
 
@@ -1266,6 +1267,7 @@ void Frame::ComputeStereoMatches()
     // mvuRight存储右图匹配点索引
     // mvDepth存储特征点的深度信息
     mvuRight = vector<float>(N,-1.0f);
+    mvvRight = vector<float>(N,-1.0f);//add
     mvDepth = vector<float>(N,-1.0f);
 
     // orb特征相似度阈值  -> mean ～= (max  + min) / 2
@@ -1566,6 +1568,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
     // mvuRight存储右图匹配点索引
     // mvDepth存储特征点的深度信息
     mvuRight = vector<float>(N,-1.0f);
+    mvvRight = vector<float>(N,-1.0f);//add
     mvDepth = vector<float>(N,-1.0f);
 
     // orb特征相似度阈值  -> mean ～= (max  + min) / 2
@@ -1647,6 +1650,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
         size_t bestIdxR = 0;
 
         int iL=&kpL - &mvKeys[0];// 计算了当前特征点 kpL 在 mvKeys 中的索引，以便获取对应的描述子
+        cout<<"iL============="<<iL<<endl;
         const cv::Mat &dL = mDescriptors.row(iL);//还能用“row”吗？应该没问题，就是取每个特征点的描述子，只不过每个特征点描述子存在一行，这里是取了一行，即一个特征点的描述子
 
         // 2. 粗匹配 在右图的极线上进行匹配点搜索
@@ -1768,6 +1772,9 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
             if(iniu<0 || endu >= mpORBextractorRight->mvImagePyramid[kpL.octave].cols)
                 continue;
 
+            int imgWidth = mpORBextractorRight->mvImagePyramid[kpL.octave].cols;
+            int imgHeight = mpORBextractorRight->mvImagePyramid[kpL.octave].rows;
+
             // 在搜索范围内从左到右滑动，并计算图像块相似度
             // 设定搜索范围和步长
             for(int incR=-L; incR<=+L; incR++)
@@ -1776,19 +1783,26 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
                 // 计算沿极线的y坐标
                 double y = (-A*x - C) / B;
 
-                // 提取右图中，以特征点(x,y)平移后的点为中心, 半径为w的图像快patch
-//                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);// todo 为什么是[kpL.octave]？
-                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(y-w,y+w+1).colRange(x-w,x+w+1);
-//                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvR0 -w,scaledvR0+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);
+                // 确定访问的行和列范围不会超出图像的实际尺寸
+                // 检查计算后的范围是否有效
+//                if(x+w+1 < 960 && x-w >0 && y-w>0 && y+w+1<540 && iL<390) {// todo 这个范围有问题，可能要考虑缩放系数
+                if(x+w+1 < imgWidth && x-w >0 && y-w>0 && y+w+1<imgHeight) {// todo 这个范围有问题，可能要考虑缩放系数
 
-                float dist = cv::norm(IL,IR,cv::NORM_L1);// sad 计算
-                if(dist<bestDist)
-                {
-                    bestDist =  dist;
-                    bestincR = incR;//这是横坐标的增量，还应该求一个纵坐标的增量。后面没有求解纵坐标增量，而是直接带入横坐标到极线方程求纵坐标
+                    // 提取右图中，以特征点(x,y)平移后的点为中心, 半径为w的图像快patch
+//                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);// todo 为什么是[kpL.octave]？
+//                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvR0 -w,scaledvR0+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);
+                    cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(y-w,y+w+1).colRange(x-w,x+w+1);//有时报错
+
+                    float dist = cv::norm(IL,IR,cv::NORM_L1);// sad 计算
+                    if(dist<bestDist)
+                    {
+                        bestDist =  dist;
+                        bestincR = incR;//这是横坐标的增量，还应该求一个纵坐标的增量。后面没有求解纵坐标增量，而是直接带入横坐标到极线方程求纵坐标
+                    }
+
+                    vDists[L+incR] = dist;// L+incR 为refine后的匹配点列坐标(x)
                 }
 
-                vDists[L+incR] = dist;// L+incR 为refine后的匹配点列坐标(x)
             }
 
             // 搜索窗口越界判断ß
@@ -1892,28 +1906,31 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
 
 //////////////////////////////////////////////////////// 到这里，看结果，得到的基本全是正确的匹配点
 
-            float disparity_fake = (uL-bestuR);
+//            float disparity = (uL-bestuR);
+            float L1=uL-960/2;
+            float L2=960/2-bestuR;
+            float tan_alpha=L1/fx;
+            float tan_beta=L2/fx;
+            float disparity = (L1-fx*tan20)/(1+tan20*tan_alpha)+(L2-fx*tan20)/(1+tan20*tan_beta);//先测试tan20，对应theta=20数据集
 
 //            if(disparity>=minD && disparity<maxD)
-            if(disparity_fake>=minD)
+            if(disparity>=minD)
             {
                 // 如果存在负视差，则约束为0.01
-                if(disparity_fake<=0)
+                if(disparity<=0)
                 {
-                    disparity_fake=0.01;
+                    disparity=0.01;
                     bestuR = uL-0.01;
                 }
                 // 根据视差值计算深度信息
                 // 保存最相似点的列坐标(x)信息
                 // 保存归一化sad最小相似度
                 // Step 5. 最优视差值/深度选择.
-//                mvDepth[iL]=mbf/disparity;
-//                mvuRight[iL] = bestuR;
-                float tan_alpha=(uL-960/2)/fx;
-                float tan_beta=(960/2-bestuR)/fx;
-                mvDepth[&kpL - &mvKeys[0]]=mb/((tan_alpha-tan20)/(1+tan20*tan_alpha)+(tan_beta-tan20)/(1+tan20*tan_beta));//先测试tan20，对应theta=20数据集
-                mvuRight[&kpL - &mvKeys[0]] = bestuR;
-                vDistIdx.push_back(pair<int,int>(bestDist,&kpL - &mvKeys[0]));
+                mvDepth[iL]=mbf/disparity;//先测试tan20，对应theta=20数据集
+//                mvDepth[iL]=mb/((tan_alpha-tan20)/(1+tan20*tan_alpha)+(tan_beta-tan20)/(1+tan20*tan_beta));//先测试tan20，对应theta=20数据集
+                mvuRight[iL] = bestuR;
+                mvvRight[iL] = bestvR;
+                vDistIdx.push_back(pair<int,int>(bestDist,iL));
             }
         }
     }
@@ -1933,41 +1950,47 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
         {
             // 误匹配点置为-1，和初始化时保持一直，作为error code
             mvuRight[vDistIdx[i].second]=-1;
+            mvvRight[vDistIdx[i].second]=-1;//add
             mvDepth[vDistIdx[i].second]=-1;
             cout<<"删除离缺点"<<endl;
         }
     }
 //    //输出匹配点数目
-//    cout<<"匹配点数目：：：：：："<<vDistIdx.size()<<endl;//0
+    cout<<"匹配点数目：：：：：："<<vDistIdx.size()<<endl;//0
 
-    //! 绘制匹配点
-    cv::Mat imgMatches;
-    cv::hconcat(imgLeft, imgRight, imgMatches);
-    if (!imgMatches.empty()) {
-        for (const auto &idxPair: vDistIdx) {
-            const cv::KeyPoint &kpL = mvKeys[idxPair.second];
-            const cv::KeyPoint &kpR = mvKeysRight[mvuRight[idxPair.second]];
+    //! 绘制所有匹配点
+    int count_keypoint;//计数
+    cv::Mat imgMatches1;
+    cv::hconcat(imgLeft, imgRight, imgMatches1); // 将左右图像水平拼接
+    for(size_t i = 0; i < mvKeys.size(); ++i) {
+        // 检查是否有有效的匹配（通过深度信息或右图坐标是否已知来判断）
+        if(mvDepth[i] > 0 && mvuRight[i] >= 0 && mvvRight[i]>=0) {
+            count_keypoint++;//计数
+            cv::Point2f left_point = mvKeys[i].pt; // 左图中的匹配点
+            // 注意：右图的x坐标需要加上左图的宽度，因为图像是水平拼接的
+            cv::Point2f right_point = cv::Point2f(mvuRight[i] + imgLeft.cols, mvvRight[i]);
 
-            // 左图匹配点坐标
-            cv::Point2f ptL = kpL.pt;
-            // 右图匹配点坐标（在右图的列坐标+左图宽度）
-            cv::Point2f ptR = cv::Point2f(kpR.pt.x + imgLeft.cols, kpR.pt.y);
-
-            // 绘制线段连接匹配点
-            cv::line(imgMatches, ptL, ptR, cv::Scalar(0, 255, 0), 1);
-            // 绘制匹配点
-            cv::circle(imgMatches, ptL, 2, cv::Scalar(255, 0, 0), -1);
-            cv::circle(imgMatches, ptR, 2, cv::Scalar(0, 0, 255), -1);
+            // 绘制匹配连线
+            cv::line(imgMatches1, left_point, right_point, cv::Scalar(0, 255, 0), 1);
+            // 在匹配点上绘制小圆圈
+            cv::circle(imgMatches1, left_point, 2, cv::Scalar(255, 0, 0), -1);
+            cv::circle(imgMatches1, right_point, 2, cv::Scalar(0, 0, 255), -1);
         }
-
-        // 保存绘制了匹配点的图像（可选）
-        auto now = std::chrono::system_clock::now();
-        auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        std::string matchesFilename =
-                "/home/hl/project/ORB_SLAM3_detailed_comments-master/demo/all_matches/matches_" + std::to_string(timestamp) +
-                ".png";
-//        cv::imwrite(matchesFilename, imgMatches);
     }
+    // 在图像上添加文字
+    std::string text = "numbers of keypoints: " + std::to_string(count_keypoint);
+    int fontFace = cv::FONT_HERSHEY_SIMPLEX;
+    double fontScale = 0.5;
+    int thickness = 1;
+    cv::Point textOrg(10, 30);  // 您可以调整这个位置，以便文字在图像上的合适位置显示
+    cv::Scalar textColor(255, 255, 255); // 白色文字
+    cv::putText(imgMatches1, text, textOrg, fontFace, fontScale, textColor, thickness);
+    auto now1 = std::chrono::system_clock::now();
+    auto timestamp1 = std::chrono::duration_cast<std::chrono::seconds>(now1.time_since_epoch()).count();
+    std::string matchesFilename1 =
+            "/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches/matches_" + std::to_string(timestamp1) + ".png";
+    cv::imwrite(matchesFilename1, imgMatches1); //结果保存在/home/hl/project
+    cv::waitKey(500);//一定要这样，不然一张图没存完就搞下一张图去了，每张图就能得到几个特征点
 
 }
 
