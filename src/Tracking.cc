@@ -2716,7 +2716,7 @@ void Tracking::StereoInitialization()   // @TODO 双目初始化  question
 {
     // 初始化要求当前帧的特征点超过500 一般都能满足
     cout<<"mCurrentFrame.N ==================="<<mCurrentFrame.N<<endl;
-    if(mCurrentFrame.N>500)//这里的特征点数量在双目模式指左目图像的特征点数量，在双鱼眼组合双目模式下是指左目+右目特征点的数量
+    if(mCurrentFrame.N>500)//500 这里的特征点数量在双目模式指左目图像的特征点数量，在双鱼眼组合双目模式下是指左目+右目特征点的数量
     {
         cout<<"特征点数量（在双目模式指左目图像的特征点数量，双鱼眼组合双目模式下是指左目+右目特征点的数量）="<<mCurrentFrame.N<<endl;
         if (mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD)
@@ -2791,7 +2791,7 @@ void Tracking::StereoInitialization()   // @TODO 双目初始化  question
             for(int i = 0; i < mCurrentFrame.Nleft; i++){   //遍历当前帧的左相机特征点
                 int rightIndex = mCurrentFrame.mvLeftToRightMatch[i];   //获取与左相机特征点匹配的右相机特征点索引
                 if(rightIndex != -1){   //检查是否存在匹配
-                    Eigen::Vector3f x3D = mCurrentFrame.mvStereo3Dpoints[i];    //获取三维点坐标:使用左相机特征点和右相机特征点的匹配信息来计算三维世界坐标点
+                    Eigen::Vector3f x3D = mCurrentFrame.mvStereo3Dpoints[i];    //获取三维点坐标:使用左相机特征点和右相机特征点的匹配信息来计算三维世界坐标点（todo 似乎只在鱼眼相机时有效，其余情况为0？）
 
                     MapPoint* pNewMP = new MapPoint(x3D, pKFini, mpAtlas->GetCurrentMap()); //创建一个新的地图点:使用左相机特征点和右相机特征点的匹配信息来计算三维世界坐标点
 

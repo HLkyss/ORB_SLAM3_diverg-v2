@@ -1530,7 +1530,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
     Sophus::SE3f T = Tlr_;
     //求逆
     T = T.inverse();
-    cout<<"T.matrix() = "<<T.matrix()<<endl;
+//    cout<<"T.matrix() = "<<T.matrix()<<endl;
     Eigen::Matrix4f T_matrix = T.matrix();
     // 转换为 OpenCV 矩阵，使用 CV_32F，并手动复制数据
     cv::Mat T_cv(4, 4, CV_64F);
@@ -1539,30 +1539,30 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
             T_cv.at<double>(i, j) = T_matrix(i, j);  // Transpose the data during copying
         }
     }
-    cout << "T_cv = " << T_cv << endl;
+//    cout << "T_cv = " << T_cv << endl;
 
     // 从 4x4 矩阵中提取 3x3 旋转矩阵部分
     cv::Mat R = T_cv(cv::Rect(0, 0, 3, 3));
     cv::Mat t = T_cv(cv::Rect(3, 0, 1, 3));
     //输出R和t
-    cout<<"R = "<<R<<endl;
-    cout<<"t = "<<t<<endl;
+//    cout<<"R = "<<R<<endl;
+//    cout<<"t = "<<t<<endl;
     // 计算平移向量的反对称矩阵
     cv::Mat tx = (cv::Mat_<double>(3, 3) << 0, -t.at<double>(2, 0), t.at<double>(1, 0),
             t.at<double>(2, 0), 0, -t.at<double>(0, 0),
             -t.at<double>(1, 0), t.at<double>(0, 0), 0);
     //输出tx的类型
-    cout<<"tx.type() = "<<tx.type()<<endl;
+//    cout<<"tx.type() = "<<tx.type()<<endl;
     //输出R的类型
-    cout<<"R.type() = "<<R.type()<<endl;
+//    cout<<"R.type() = "<<R.type()<<endl;
     // 计算本质矩阵
     cv::Mat E = tx * R;
     // 计算基础矩阵
     cv::Mat K_inv = K.inv();
-    cout<<"K_inv = "<<K_inv<<endl;
+//    cout<<"K_inv = "<<K_inv<<endl;
     cv::Mat F = K_inv.t() * E * K_inv;
 //    cv::Mat F = K.inv().t() * E * K.inv();
-    cout<<"F = "<<F<<endl;
+//    cout<<"F = "<<F<<endl;
 
     // 为匹配结果预先分配内存，数据类型为float型
     // mvuRight存储右图匹配点索引
@@ -1650,7 +1650,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
         size_t bestIdxR = 0;
 
         int iL=&kpL - &mvKeys[0];// 计算了当前特征点 kpL 在 mvKeys 中的索引，以便获取对应的描述子
-        cout<<"iL============="<<iL<<endl;
+//        cout<<"iL============="<<iL<<endl;
         const cv::Mat &dL = mDescriptors.row(iL);//还能用“row”吗？应该没问题，就是取每个特征点的描述子，只不过每个特征点描述子存在一行，这里是取了一行，即一个特征点的描述子
 
         // 2. 粗匹配 在右图的极线上进行匹配点搜索
@@ -1786,7 +1786,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
                 // 确定访问的行和列范围不会超出图像的实际尺寸
                 // 检查计算后的范围是否有效
 //                if(x+w+1 < 960 && x-w >0 && y-w>0 && y+w+1<540 && iL<390) {// todo 这个范围有问题，可能要考虑缩放系数
-                if(x+w+1 < imgWidth && x-w >0 && y-w>0 && y+w+1<imgHeight) {// todo 这个范围有问题，可能要考虑缩放系数
+                if(x+w+1 < imgWidth && x-w >0 && y-w>0 && y+w+1<imgHeight) {
 
                     // 提取右图中，以特征点(x,y)平移后的点为中心, 半径为w的图像快patch
 //                cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);// todo 为什么是[kpL.octave]？
@@ -1952,7 +1952,7 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
             mvuRight[vDistIdx[i].second]=-1;
             mvvRight[vDistIdx[i].second]=-1;//add
             mvDepth[vDistIdx[i].second]=-1;
-            cout<<"删除离缺点"<<endl;
+//            cout<<"删除离缺点"<<endl;
         }
     }
 //    //输出匹配点数目
@@ -1988,9 +1988,9 @@ void Frame::ComputeStereoMatches2() // todo-jixian 2.3 diy
     auto now1 = std::chrono::system_clock::now();
     auto timestamp1 = std::chrono::duration_cast<std::chrono::seconds>(now1.time_since_epoch()).count();
     std::string matchesFilename1 =
-            "/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches/matches_" + std::to_string(timestamp1) + ".png";
-    cv::imwrite(matchesFilename1, imgMatches1); //结果保存在/home/hl/project
-    cv::waitKey(500);//一定要这样，不然一张图没存完就搞下一张图去了，每张图就能得到几个特征点
+            "/home/hl/project/ORB_SLAM3_diverg-v2/demo/raw_matches5/matches_" + std::to_string(timestamp1) + ".png";
+//    cv::imwrite(matchesFilename1, imgMatches1); //结果保存在/home/hl/project
+//    cv::waitKey(500);//一定要这样，不然一张图没存完就搞下一张图去了，每张图就能得到几个特征点
 
 }
 
